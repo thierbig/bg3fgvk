@@ -28,12 +28,40 @@ PFN_vkQueuePresentKHR SlProxyPresent(){
   return g_sl ? (PFN_vkQueuePresentKHR)GetProcAddress(g_sl,"vkQueuePresentKHR") : nullptr;
 }
 
-// Initializes Streamline once (idempotent). Loads DLSS-G, Reflex, and PCL.
+// --- Streamline function pointers, resolved dynamically from sl.interposer.dll ---
+// No SL import lib is linked (see CMakeLists: only detours.lib). Every SL entry
+// point below is pulled via GetProcAddress instead of calling the header's
+// extern "C" declarations directly, so nothing here forces the linker to resolve
+// an SL symbol.
+static PFun_slInit* p_slInit{};
+static PFun_slSetVulkanInfo* p_slSetVulkanInfo{};
+static PFun_slGetFeatureFunction* p_slGetFeatureFunction{};
+static PFun_slReflexSetOptions* p_slReflexSetOptions{};
+static PFun_slDLSSGSetOptions* p_slDLSSGSetOptions{};
+static PFun_slDLSSGGetState* p_slDLSSGGetState{};
+
+// Resolves slInit/slSetVulkanInfo/slGetFeatureFunction from the interposer module
+// and calls slInit once. Returns true if slInit succeeded.
 static bool EnsureSlInit(){
   static bool s_tried = false;
   static bool s_armed = false;
   if(s_tried) return s_armed;
   s_tried = true;
+
+  if(!g_sl){ g_sl = GetModuleHandleA("sl.interposer.dll");
+    if(!g_sl) g_sl = LoadLibraryA("sl.interposer.dll");
+    Log("sl.interposer handle=%p", (void*)g_sl); }
+  if(!g_sl){ Log("EnsureSlInit: sl.interposer.dll not loaded"); return false; }
+
+  p_slInit = (PFun_slInit*)GetProcAddress(g_sl, "slInit");
+  p_slSetVulkanInfo = (PFun_slSetVulkanInfo*)GetProcAddress(g_sl, "slSetVulkanInfo");
+  p_slGetFeatureFunction = (PFun_slGetFeatureFunction*)GetProcAddress(g_sl, "slGetFeatureFunction");
+  Log("resolved slInit=%p slSetVulkanInfo=%p slGetFeatureFunction=%p",
+      (void*)p_slInit, (void*)p_slSetVulkanInfo, (void*)p_slGetFeatureFunction);
+  if(!p_slInit || !p_slSetVulkanInfo || !p_slGetFeatureFunction){
+    Log("EnsureSlInit: failed to resolve core SL functions");
+    return false;
+  }
 
   sl::Preferences p{};
   static const sl::Feature feats[] = { sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
@@ -42,10 +70,45 @@ static bool EnsureSlInit(){
   p.flags |= sl::PreferenceFlags::eUseManualHooking;
   p.renderAPI = sl::RenderAPI::eVulkan;
 
-  sl::Result r = slInit(p, sl::kSDKVersion);
+  sl::Result r = p_slInit(p, sl::kSDKVersion);
   Log("slInit -> %d", (int)r);
   s_armed = (r == sl::Result::eOk);
   return s_armed;
+}
+
+// Resolves the DLSS-G / Reflex feature functions via slGetFeatureFunction.
+// Must be called AFTER slSetVulkanInfo (the header requires the device to be
+// set first: "Macros which use slGetFeatureFunction can only be used AFTER
+// device is set by calling either slSetD3DDevice or slSetVulkanInfo").
+static bool EnsureFeatureFunctions(){
+  static bool s_tried = false;
+  static bool s_ok = false;
+  if(s_tried) return s_ok;
+  s_tried = true;
+
+  if(!p_slGetFeatureFunction){ Log("EnsureFeatureFunctions: slGetFeatureFunction not resolved"); return false; }
+
+  void* fn = nullptr;
+  sl::Result r;
+
+  fn = nullptr;
+  r = p_slGetFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions", fn);
+  Log("slGetFeatureFunction(slReflexSetOptions) -> %d fn=%p", (int)r, fn);
+  p_slReflexSetOptions = (PFun_slReflexSetOptions*)fn;
+
+  fn = nullptr;
+  r = p_slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", fn);
+  Log("slGetFeatureFunction(slDLSSGSetOptions) -> %d fn=%p", (int)r, fn);
+  p_slDLSSGSetOptions = (PFun_slDLSSGSetOptions*)fn;
+
+  fn = nullptr;
+  r = p_slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", fn);
+  Log("slGetFeatureFunction(slDLSSGGetState) -> %d fn=%p", (int)r, fn);
+  p_slDLSSGGetState = (PFun_slDLSSGGetState*)fn;
+
+  s_ok = p_slReflexSetOptions && p_slDLSSGSetOptions && p_slDLSSGGetState;
+  if(!s_ok) Log("EnsureFeatureFunctions: one or more feature functions failed to resolve");
+  return s_ok;
 }
 
 void OnDeviceCreated(){
@@ -57,30 +120,33 @@ void OnDeviceCreated(){
   vi.physicalDevice = fgvk::gPhysicalDevice;
   vi.graphicsQueueIndex = 0;
   vi.graphicsQueueFamily = fgvk::gGraphicsFamily;
-  sl::Result rVk = slSetVulkanInfo(vi);
+  sl::Result rVk = p_slSetVulkanInfo(vi);
   Log("slSetVulkanInfo -> %d", (int)rVk);
+
+  if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
   // DLSS-G requires Reflex ON. Set Reflex before enabling DLSS-G.
   sl::ReflexOptions ro{};
   ro.mode = sl::ReflexMode::eLowLatency;
-  sl::Result rReflex = slReflexSetOptions(ro);
+  sl::Result rReflex = p_slReflexSetOptions(ro);
   Log("slReflexSetOptions -> %d", (int)rReflex);
 
   sl::DLSSGOptions o{};
   o.mode = sl::DLSSGMode::eOn;
   o.numFramesToGenerate = 1;
   sl::ViewportHandle vp{0};
-  sl::Result rDlssg = slDLSSGSetOptions(vp, o);
+  sl::Result rDlssg = p_slDLSSGSetOptions(vp, o);
   Log("slDLSSGSetOptions -> %d", (int)rDlssg);
 }
 
 void PollDLSSGState(){
+  if(!p_slDLSSGGetState) return;
   sl::DLSSGState st{};
   sl::DLSSGOptions o{};
   o.mode = sl::DLSSGMode::eOn;
   o.numFramesToGenerate = 1;
   sl::ViewportHandle vp{0};
-  if(slDLSSGGetState(vp, st, &o) == sl::Result::eOk){
+  if(p_slDLSSGGetState(vp, st, &o) == sl::Result::eOk){
     static uint32_t last = 0xFFFFFFFF;
     if((uint32_t)st.status != last){
       last = (uint32_t)st.status;
