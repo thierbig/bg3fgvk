@@ -67,8 +67,15 @@ static bool EnsureSlInit(){
   static const sl::Feature feats[] = { sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
   p.featuresToLoad = feats;
   p.numFeaturesToLoad = 3;
-  p.flags |= sl::PreferenceFlags::eUseManualHooking;
+  // NO eUseManualHooking: BG3SE found the hybrid (manual-hooking flag + interposer-driven
+  // instance/device creation) crashes inside initializePlugins during the interposer's
+  // vkCreateDevice - our exact crash after slInit. Let the interposer own creation.
+  p.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;  // needed by slSetTagForFrame (M2)
   p.renderAPI = sl::RenderAPI::eVulkan;
+  // applicationId 0xE658703: the NGX app-id family NVIDIA's driver serves on this machine
+  // (the working PureDark/nvapp stack ran under it). The SDK sample id has no NGX min-spec
+  // data, so plugins self-disable on this GPU and DLSS-G never arms.
+  p.applicationId = 0xE658703;
 
   sl::Result r = p_slInit(p, sl::kSDKVersion);
   Log("slInit -> %d", (int)r);
