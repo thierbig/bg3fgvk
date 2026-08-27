@@ -81,6 +81,8 @@ static PFN_vkAcquireNextImage2KHR d_AcquireNextImage2KHR{};
 static PFN_vkQueuePresentKHR d_QueuePresentKHR{};
 static PFN_vkQueueSubmit d_QueueSubmit{};
 static PFN_vkQueueSubmit2 d_QueueSubmit2{};
+static PFN_vkGetDeviceQueue d_GetDeviceQueue{};
+static PFN_vkGetDeviceQueue2 d_GetDeviceQueue2{};
 
 // watchdog state: counters + a position marker naming the call in flight
 std::atomic<uint32_t> g_wdPresents{0}, g_wdSubmits{0}, g_wdEvals{0};
@@ -211,6 +213,23 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_QueuePresentKHR(
   return pr;
 }
 
+static VKAPI_ATTR void VKAPI_CALL hd_GetDeviceQueue(
+    VkDevice dev, uint32_t family, uint32_t index, VkQueue* pQueue){
+  auto proxy = (PFN_vkGetDeviceQueue)SlProxyFn("vkGetDeviceQueue");
+  if (proxy) proxy(dev, family, index, pQueue); else d_GetDeviceQueue(dev, family, index, pQueue);
+  static bool logged=false; if(!logged){ logged=true;
+    Log("vkGetDeviceQueue routed via interposer=%p queue=%p (SL now tracks the present queue)",
+        (void*)proxy, pQueue?(void*)*pQueue:nullptr); }
+}
+
+static VKAPI_ATTR void VKAPI_CALL hd_GetDeviceQueue2(
+    VkDevice dev, const VkDeviceQueueInfo2* info, VkQueue* pQueue){
+  auto proxy = (PFN_vkGetDeviceQueue2)SlProxyFn("vkGetDeviceQueue2");
+  if (proxy) proxy(dev, info, pQueue); else d_GetDeviceQueue2(dev, info, pQueue);
+  static bool logged=false; if(!logged){ logged=true;
+    Log("vkGetDeviceQueue2 routed via interposer=%p queue=%p", (void*)proxy, pQueue?(void*)*pQueue:nullptr); }
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL hd_QueueSubmit(
     VkQueue queue, uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence){
   if (g_inSwapFamily || CallChainContainsStreamline()) return d_QueueSubmit(queue, submitCount, pSubmits, fence);
@@ -241,6 +260,8 @@ void InstallDeviceHooks(VkDevice dev){
   d_QueuePresentKHR      = (PFN_vkQueuePresentKHR)     o_GetDeviceProcAddr(dev, "vkQueuePresentKHR");
   d_QueueSubmit          = (PFN_vkQueueSubmit)         o_GetDeviceProcAddr(dev, "vkQueueSubmit");
   d_QueueSubmit2         = (PFN_vkQueueSubmit2)        o_GetDeviceProcAddr(dev, "vkQueueSubmit2");
+  d_GetDeviceQueue       = (PFN_vkGetDeviceQueue)      o_GetDeviceProcAddr(dev, "vkGetDeviceQueue");
+  d_GetDeviceQueue2      = (PFN_vkGetDeviceQueue2)     o_GetDeviceProcAddr(dev, "vkGetDeviceQueue2");
   Log("driver ptrs: createSC=%p destroySC=%p getImgs=%p acq=%p acq2=%p present=%p",
       (void*)d_CreateSwapchainKHR,(void*)d_DestroySwapchainKHR,(void*)d_GetSwapchainImagesKHR,
       (void*)d_AcquireNextImageKHR,(void*)d_AcquireNextImage2KHR,(void*)d_QueuePresentKHR);
@@ -253,6 +274,8 @@ void InstallDeviceHooks(VkDevice dev){
   if (d_QueuePresentKHR)      DetourAttach(&(PVOID&)d_QueuePresentKHR,(PVOID)hd_QueuePresentKHR);
   if (d_QueueSubmit)          DetourAttach(&(PVOID&)d_QueueSubmit,(PVOID)hd_QueueSubmit);
   if (d_QueueSubmit2)         DetourAttach(&(PVOID&)d_QueueSubmit2,(PVOID)hd_QueueSubmit2);
+  if (d_GetDeviceQueue)       DetourAttach(&(PVOID&)d_GetDeviceQueue,(PVOID)hd_GetDeviceQueue);
+  if (d_GetDeviceQueue2)      DetourAttach(&(PVOID&)d_GetDeviceQueue2,(PVOID)hd_GetDeviceQueue2);
   LONG r = DetourTransactionCommit();
   Log("InstallDeviceHooks: commit -> %ld", r);
   installed = (r == NO_ERROR);
