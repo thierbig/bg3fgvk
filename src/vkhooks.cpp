@@ -4,6 +4,8 @@
 #include "inputs.h"
 #include <windows.h>
 #include <detours.h>
+#include <mutex>
+#include <unordered_map>
 
 namespace fgvk {
 VkInstance gInstance{};
@@ -81,10 +83,43 @@ struct SwapGuard {
   ~SwapGuard(){ g_inSwapFamily = false; }
 };
 
+// Streamline's OWN threads (DLSS-G pacer/generator) call the driver functions we detoured
+// in place; the thread_local guard cannot cover them. Stack-walk: a call whose chain contains
+// an sl.* module (or nvngx_dlssg) is SL-internal - pass it straight to the driver original.
+// NvLowLatencyVk is deliberately NOT matched (the game's own Reflex library sits in normal
+// game call chains). Ported from BG3SE (verdict cache per module).
+static bool CallChainContainsStreamline(){
+  void* frames[7]{};
+  USHORT n = CaptureStackBackTrace(1, 7, frames, nullptr);
+  static std::mutex lock;
+  static std::unordered_map<HMODULE,bool> verdicts;
+  for (USHORT i = 0; i < n; i++){
+    HMODULE mod = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+          | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(frames[i]), &mod) || mod == nullptr) continue;
+    {
+      std::lock_guard<std::mutex> _(lock);
+      auto it = verdicts.find(mod);
+      if (it != verdicts.end()) { if (it->second) return true; continue; }
+    }
+    wchar_t path[MAX_PATH]{};
+    GetModuleFileNameW(mod, path, MAX_PATH);
+    const wchar_t* base = wcsrchr(path, L'\\'); base = base ? base + 1 : path;
+    bool isSL = (_wcsnicmp(base, L"sl.", 3) == 0) || (_wcsnicmp(base, L"nvngx_dlssg", 11) == 0);
+    {
+      std::lock_guard<std::mutex> _(lock);
+      verdicts[mod] = isSL;
+    }
+    if (isSL) return true;
+  }
+  return false;
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL hd_CreateSwapchainKHR(
     VkDevice dev, const VkSwapchainCreateInfoKHR* ci,
     const VkAllocationCallbacks* a, VkSwapchainKHR* out){
-  if (g_inSwapFamily) return d_CreateSwapchainKHR(dev, ci, a, out);
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_CreateSwapchainKHR(dev, ci, a, out);
   SwapGuard g;
   auto proxy = (PFN_vkCreateSwapchainKHR)SlProxyFn("vkCreateSwapchainKHR");
   Log("vkCreateSwapchainKHR(dev) %ux%u fmt=%d proxy=%p", ci->imageExtent.width,
@@ -96,7 +131,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_CreateSwapchainKHR(
 
 static VKAPI_ATTR void VKAPI_CALL hd_DestroySwapchainKHR(
     VkDevice dev, VkSwapchainKHR sc, const VkAllocationCallbacks* a){
-  if (g_inSwapFamily) { d_DestroySwapchainKHR(dev, sc, a); return; }
+  if (g_inSwapFamily || CallChainContainsStreamline()) { d_DestroySwapchainKHR(dev, sc, a); return; }
   SwapGuard g;
   auto proxy = (PFN_vkDestroySwapchainKHR)SlProxyFn("vkDestroySwapchainKHR");
   if (proxy) proxy(dev, sc, a); else d_DestroySwapchainKHR(dev, sc, a);
@@ -104,7 +139,7 @@ static VKAPI_ATTR void VKAPI_CALL hd_DestroySwapchainKHR(
 
 static VKAPI_ATTR VkResult VKAPI_CALL hd_GetSwapchainImagesKHR(
     VkDevice dev, VkSwapchainKHR sc, uint32_t* count, VkImage* images){
-  if (g_inSwapFamily) return d_GetSwapchainImagesKHR(dev, sc, count, images);
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_GetSwapchainImagesKHR(dev, sc, count, images);
   SwapGuard g;
   auto proxy = (PFN_vkGetSwapchainImagesKHR)SlProxyFn("vkGetSwapchainImagesKHR");
   return proxy ? proxy(dev, sc, count, images) : d_GetSwapchainImagesKHR(dev, sc, count, images);
@@ -113,7 +148,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_GetSwapchainImagesKHR(
 static VKAPI_ATTR VkResult VKAPI_CALL hd_AcquireNextImageKHR(
     VkDevice dev, VkSwapchainKHR sc, uint64_t timeout,
     VkSemaphore sem, VkFence fence, uint32_t* idx){
-  if (g_inSwapFamily) return d_AcquireNextImageKHR(dev, sc, timeout, sem, fence, idx);
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_AcquireNextImageKHR(dev, sc, timeout, sem, fence, idx);
   SwapGuard g;
   auto proxy = (PFN_vkAcquireNextImageKHR)SlProxyFn("vkAcquireNextImageKHR");
   return proxy ? proxy(dev, sc, timeout, sem, fence, idx)
@@ -122,7 +157,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_AcquireNextImageKHR(
 
 static VKAPI_ATTR VkResult VKAPI_CALL hd_AcquireNextImage2KHR(
     VkDevice dev, const VkAcquireNextImageInfoKHR* info, uint32_t* idx){
-  if (g_inSwapFamily) return d_AcquireNextImage2KHR(dev, info, idx);
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_AcquireNextImage2KHR(dev, info, idx);
   SwapGuard g;
   auto proxy2 = (PFN_vkAcquireNextImage2KHR)SlProxyFn("vkAcquireNextImage2KHR");
   if (proxy2) return proxy2(dev, info, idx);
@@ -135,7 +170,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_AcquireNextImage2KHR(
 
 static VKAPI_ATTR VkResult VKAPI_CALL hd_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
-  if (g_inSwapFamily) return d_QueuePresentKHR(queue, pPresentInfo);
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_QueuePresentKHR(queue, pPresentInfo);
   SwapGuard g;
   PollDLSSGState();
   NgxProbeTick();           // install the DLSS-SR snoop once NGX modules are loaded
