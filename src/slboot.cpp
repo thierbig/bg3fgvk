@@ -118,6 +118,16 @@ static bool EnsureFeatureFunctions(){
   return s_ok;
 }
 
+bool EnsureStreamlineInit(){ return EnsureSlInit(); }
+PFN_vkCreateInstance SlProxyCreateInstance(){
+  if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
+  return g_sl ? (PFN_vkCreateInstance)GetProcAddress(g_sl,"vkCreateInstance") : nullptr;
+}
+PFN_vkCreateDevice SlProxyCreateDevice(){
+  if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
+  return g_sl ? (PFN_vkCreateDevice)GetProcAddress(g_sl,"vkCreateDevice") : nullptr;
+}
+
 void OnDeviceCreated(){
   if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit failed, skipping SL device setup"); return; }
 

@@ -11,6 +11,7 @@ VkDevice gDevice{};
 VkQueue gGraphicsQueue{};
 uint32_t gGraphicsFamily{};
 
+static thread_local bool g_inCreate = false;
 static PFN_vkCreateInstance o_CreateInstance{};
 static PFN_vkCreateDevice o_CreateDevice{};
 static PFN_vkCreateSwapchainKHR o_CreateSwapchainKHR{};
@@ -20,10 +21,19 @@ static VKAPI_ATTR VkResult VKAPI_CALL h_CreateInstance(
     const VkInstanceCreateInfo* ci,
     const VkAllocationCallbacks* a,
     VkInstance* pInstance) {
-  VkResult r = o_CreateInstance(ci, a, pInstance);
+  // Re-entrant call (Streamline's own internal vkCreateInstance during slInit / while the
+  // interposer wraps ours) -> native, never re-route.
+  if (g_inCreate) return o_CreateInstance(ci, a, pInstance);
+  g_inCreate = true;
+  // slInit BEFORE creation so SL can wrap the instance (its internal creates re-enter here
+  // guarded -> native).
+  fgvk::EnsureStreamlineInit();
+  PFN_vkCreateInstance proxy = fgvk::SlProxyCreateInstance();
+  VkResult r = proxy ? proxy(ci, a, pInstance) : o_CreateInstance(ci, a, pInstance);
+  g_inCreate = false;
   if (r == VK_SUCCESS) {
     gInstance = *pInstance;
-    Log("vkCreateInstance ok instance=%p", (void*)gInstance);
+    Log("vkCreateInstance ok (proxy=%p) instance=%p", (void*)proxy, (void*)gInstance);
   }
   return r;
 }
@@ -31,13 +41,17 @@ static VKAPI_ATTR VkResult VKAPI_CALL h_CreateInstance(
 static VKAPI_ATTR VkResult VKAPI_CALL h_CreateDevice(
     VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
     const VkAllocationCallbacks* a, VkDevice* out) {
-  VkResult r = o_CreateDevice(pd, ci, a, out);
+  if (g_inCreate) return o_CreateDevice(pd, ci, a, out);
+  g_inCreate = true;
+  PFN_vkCreateDevice proxy = fgvk::SlProxyCreateDevice();
+  VkResult r = proxy ? proxy(pd, ci, a, out) : o_CreateDevice(pd, ci, a, out);
+  g_inCreate = false;
   if (r == VK_SUCCESS) {
     gPhysicalDevice = pd; gDevice = *out;
     // first graphics queue from ci
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){
       gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
-    Log("vkCreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
+    Log("vkCreateDevice ok (proxy=%p) device=%p phys=%p gfxFamily=%u", (void*)proxy,(void*)gDevice,(void*)pd,gGraphicsFamily);
     OnDeviceCreated();   // slboot: slSetVulkanInfo + DLSS-G enable
   }
   return r;
