@@ -17,6 +17,8 @@
 
 namespace fgvk {
 static HMODULE g_sl{};
+static SlFns g_slFns;
+SlFns& GetSlFns(){ return g_slFns; }
 
 PFN_vkCreateSwapchainKHR SlProxyCreateSwapchain(){
   if(!g_sl){ g_sl = GetModuleHandleA("sl.interposer.dll");
@@ -115,6 +117,18 @@ static bool EnsureFeatureFunctions(){
   fn = nullptr;
   r = p_slGetFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", fn);
   Log("slGetFeatureFunction(slDLSSGGetState) -> %d fn=%p", (int)r, fn);
+
+  // Frame-data + marker functions (core exports + feature fns) for the input pipeline.
+  g_slFns.getNewFrameToken = (PFun_slGetNewFrameToken*)GetProcAddress(g_sl,"slGetNewFrameToken");
+  g_slFns.setTagForFrame   = (PFun_slSetTagForFrame*)  GetProcAddress(g_sl,"slSetTagForFrame");
+  g_slFns.setConstants     = (PFun_slSetConstants*)    GetProcAddress(g_sl,"slSetConstants");
+  { void* f=nullptr; p_slGetFeatureFunction(sl::kFeaturePCL,"slPCLSetMarker",f);
+    g_slFns.pclSetMarker=(PFun_slPCLSetMarker*)f; }
+  { void* f=nullptr; p_slGetFeatureFunction(sl::kFeatureReflex,"slReflexSleep",f);
+    g_slFns.reflexSleep=(PFun_slReflexSleep*)f; }
+  Log("frame fns: token=%p tag=%p consts=%p pcl=%p sleep=%p",
+      (void*)g_slFns.getNewFrameToken,(void*)g_slFns.setTagForFrame,(void*)g_slFns.setConstants,
+      (void*)g_slFns.pclSetMarker,(void*)g_slFns.reflexSleep);
   p_slDLSSGGetState = (PFun_slDLSSGGetState*)fn;
 
   s_ok = p_slReflexSetOptions && p_slDLSSGSetOptions && p_slDLSSGGetState;

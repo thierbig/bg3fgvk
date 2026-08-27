@@ -1,6 +1,7 @@
 #include "vkhooks.h"
 #include "log.h"
 #include "slboot.h"
+#include "inputs.h"
 #include <windows.h>
 #include <detours.h>
 
@@ -137,10 +138,14 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_QueuePresentKHR(
   if (g_inSwapFamily) return d_QueuePresentKHR(queue, pPresentInfo);
   SwapGuard g;
   PollDLSSGState();
+  NgxProbeTick();           // install the DLSS-SR snoop once NGX modules are loaded
+  PresentMarkersBegin();    // reflex sleep + PCL sim/render/present-start markers
   static bool logged = false;
   auto proxy = (PFN_vkQueuePresentKHR)SlProxyFn("vkQueuePresentKHR");
   if (!logged) { logged = true; Log("first present: proxy=%p", (void*)proxy); }
-  return proxy ? proxy(queue, pPresentInfo) : d_QueuePresentKHR(queue, pPresentInfo);
+  VkResult pr = proxy ? proxy(queue, pPresentInfo) : d_QueuePresentKHR(queue, pPresentInfo);
+  PresentMarkersEnd();
+  return pr;
 }
 
 void InstallDeviceHooks(VkDevice dev){
@@ -224,6 +229,14 @@ void RemoveVkHooks(){
   LONG r = DetourTransactionCommit();
   Log("RemoveVkHooks: commit -> %ld", r);
   if (r != NO_ERROR) Log("RemoveVkHooks: COMMIT FAILED err=%ld", r);
+}
+
+void* DeviceFn(const char* name){
+  return (o_GetDeviceProcAddr && gDevice) ? (void*)o_GetDeviceProcAddr(gDevice, name) : nullptr;
+}
+void* LoaderFn(const char* name){
+  HMODULE vk = GetModuleHandleA("vulkan-1.dll");
+  return vk ? (void*)GetProcAddress(vk, name) : nullptr;
 }
 
 PFN_vkCreateSwapchainKHR NativeCreateSwapchain(){ return o_CreateSwapchainKHR; }
