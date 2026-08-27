@@ -110,4 +110,5 @@ void RemoveVkHooks(){
 }
 
 PFN_vkCreateSwapchainKHR NativeCreateSwapchain(){ return o_CreateSwapchainKHR; }
+PFN_vkCreateDevice NativeCreateDevice(){ return o_CreateDevice; }
 }

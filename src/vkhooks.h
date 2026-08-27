@@ -9,6 +9,7 @@ extern VkQueue gGraphicsQueue;
 extern uint32_t gGraphicsFamily;
 
 PFN_vkCreateSwapchainKHR NativeCreateSwapchain();
+PFN_vkCreateDevice NativeCreateDevice();
 
 void InstallVkHooks();
 void RemoveVkHooks();

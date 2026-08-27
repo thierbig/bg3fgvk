@@ -172,8 +172,11 @@ static void FetchSLRequirements(){
 
 VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
                             const VkAllocationCallbacks* a, VkDevice* out){
-  PFN_vkCreateDevice proxy = SlProxyCreateDevice();
-  if(!proxy){ Log("CreateDeviceWithSL: no interposer vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
+  // NATIVE vkCreateDevice, NOT the interposer's: BG3SE proved interposer-owned device
+  // creation crashes in its in-call plugin init. The working hybrid is interposer INSTANCES
+  // + manual surgery + NATIVE device + slSetVulkanInfo to register it with SL.
+  PFN_vkCreateDevice proxy = fgvk::NativeCreateDevice();
+  if(!proxy){ Log("CreateDeviceWithSL: no native vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
   FetchSLRequirements();
   if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
 
