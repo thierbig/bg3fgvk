@@ -6,6 +6,8 @@
 #include <detours.h>
 #include <mutex>
 #include <unordered_map>
+#include <atomic>
+#include <thread>
 
 namespace fgvk {
 VkInstance gInstance{};
@@ -77,6 +79,29 @@ static PFN_vkGetSwapchainImagesKHR d_GetSwapchainImagesKHR{};
 static PFN_vkAcquireNextImageKHR d_AcquireNextImageKHR{};
 static PFN_vkAcquireNextImage2KHR d_AcquireNextImage2KHR{};
 static PFN_vkQueuePresentKHR d_QueuePresentKHR{};
+static PFN_vkQueueSubmit d_QueueSubmit{};
+static PFN_vkQueueSubmit2 d_QueueSubmit2{};
+
+// watchdog state: counters + a position marker naming the call in flight
+std::atomic<uint32_t> g_wdPresents{0}, g_wdSubmits{0}, g_wdEvals{0};
+std::atomic<int> g_wdPos{0};   // 0 idle; 1 present-enter; 2 pre-proxy-present; 3 present-done; 10 eval-enter; 11 eval-orig; 12 eval-done
+static void StartWatchdog(){
+  static std::atomic<bool> started{false};
+  bool exp=false;
+  if(!started.compare_exchange_strong(exp,true)) return;
+  std::thread([]{
+    uint32_t lastP=0;
+    for(;;){
+      Sleep(2000);
+      uint32_t p=g_wdPresents.load(), s=g_wdSubmits.load(), e=g_wdEvals.load();
+      int pos=g_wdPos.load();
+      if(p!=lastP && pos==0) { lastP=p; continue; }   // healthy and idle: stay quiet
+      Log("wd: presents=%u submits=%u evals=%u pos=%d%s", p,s,e,pos,
+          (p==lastP)?" STALLED":"");
+      lastP=p;
+    }
+  }).detach();
+}
 
 struct SwapGuard {
   SwapGuard(){ g_inSwapFamily = true; }
@@ -172,15 +197,36 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
   if (g_inSwapFamily || CallChainContainsStreamline()) return d_QueuePresentKHR(queue, pPresentInfo);
   SwapGuard g;
+  StartWatchdog();
+  g_wdPresents.fetch_add(1); g_wdPos.store(1);
   PollDLSSGState();
   NgxProbeTick();           // install the DLSS-SR snoop once NGX modules are loaded
-  PresentMarkersBegin();    // reflex sleep + PCL sim/render/present-start markers
+  PresentMarkersBegin();    // reflex sleep + all six PCL markers, one token
   static bool logged = false;
   auto proxy = (PFN_vkQueuePresentKHR)SlProxyFn("vkQueuePresentKHR");
   if (!logged) { logged = true; Log("first present: proxy=%p", (void*)proxy); }
+  g_wdPos.store(2);
   VkResult pr = proxy ? proxy(queue, pPresentInfo) : d_QueuePresentKHR(queue, pPresentInfo);
-  PresentMarkersEnd();
+  g_wdPos.store(0);
   return pr;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL hd_QueueSubmit(
+    VkQueue queue, uint32_t submitCount, const VkSubmitInfo* pSubmits, VkFence fence){
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_QueueSubmit(queue, submitCount, pSubmits, fence);
+  SwapGuard g;
+  g_wdSubmits.fetch_add(1);
+  auto proxy = (PFN_vkQueueSubmit)SlProxyFn("vkQueueSubmit");
+  return proxy ? proxy(queue, submitCount, pSubmits, fence) : d_QueueSubmit(queue, submitCount, pSubmits, fence);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL hd_QueueSubmit2(
+    VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence){
+  if (g_inSwapFamily || CallChainContainsStreamline()) return d_QueueSubmit2(queue, submitCount, pSubmits, fence);
+  SwapGuard g;
+  g_wdSubmits.fetch_add(1);
+  auto proxy = (PFN_vkQueueSubmit2)SlProxyFn("vkQueueSubmit2");
+  return proxy ? proxy(queue, submitCount, pSubmits, fence) : d_QueueSubmit2(queue, submitCount, pSubmits, fence);
 }
 
 void InstallDeviceHooks(VkDevice dev){
@@ -193,6 +239,8 @@ void InstallDeviceHooks(VkDevice dev){
   d_AcquireNextImageKHR  = (PFN_vkAcquireNextImageKHR) o_GetDeviceProcAddr(dev, "vkAcquireNextImageKHR");
   d_AcquireNextImage2KHR = (PFN_vkAcquireNextImage2KHR)o_GetDeviceProcAddr(dev, "vkAcquireNextImage2KHR");
   d_QueuePresentKHR      = (PFN_vkQueuePresentKHR)     o_GetDeviceProcAddr(dev, "vkQueuePresentKHR");
+  d_QueueSubmit          = (PFN_vkQueueSubmit)         o_GetDeviceProcAddr(dev, "vkQueueSubmit");
+  d_QueueSubmit2         = (PFN_vkQueueSubmit2)        o_GetDeviceProcAddr(dev, "vkQueueSubmit2");
   Log("driver ptrs: createSC=%p destroySC=%p getImgs=%p acq=%p acq2=%p present=%p",
       (void*)d_CreateSwapchainKHR,(void*)d_DestroySwapchainKHR,(void*)d_GetSwapchainImagesKHR,
       (void*)d_AcquireNextImageKHR,(void*)d_AcquireNextImage2KHR,(void*)d_QueuePresentKHR);
@@ -203,6 +251,8 @@ void InstallDeviceHooks(VkDevice dev){
   if (d_AcquireNextImageKHR)  DetourAttach(&(PVOID&)d_AcquireNextImageKHR,(PVOID)hd_AcquireNextImageKHR);
   if (d_AcquireNextImage2KHR) DetourAttach(&(PVOID&)d_AcquireNextImage2KHR,(PVOID)hd_AcquireNextImage2KHR);
   if (d_QueuePresentKHR)      DetourAttach(&(PVOID&)d_QueuePresentKHR,(PVOID)hd_QueuePresentKHR);
+  if (d_QueueSubmit)          DetourAttach(&(PVOID&)d_QueueSubmit,(PVOID)hd_QueueSubmit);
+  if (d_QueueSubmit2)         DetourAttach(&(PVOID&)d_QueueSubmit2,(PVOID)hd_QueueSubmit2);
   LONG r = DetourTransactionCommit();
   Log("InstallDeviceHooks: commit -> %ld", r);
   installed = (r == NO_ERROR);

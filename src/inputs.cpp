@@ -17,6 +17,7 @@
 #include <sl_pcl.h>
 #include <sl_reflex.h>
 #include <cstring>
+#include <atomic>
 
 // ---- minimal NGX surface (no vendored NGX SDK; layouts match the driver ABI) ----------
 typedef int NVSDK_NGX_Result;
@@ -296,6 +297,8 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
     const NVSDK_NGX_Parameter* params, PFN_NVSDK_NGX_ProgressCallback_C cb){
   if(g_inEval) return o_NgxEvaluate(cmd,h,params,cb);
   g_inEval=true;
+  extern std::atomic<uint32_t> g_wdEvals; extern std::atomic<int> g_wdPos;
+  g_wdEvals.fetch_add(1); g_wdPos.store(10);
   if(!g_logHookLive){ g_logHookLive=true; Log("NGX EvaluateFeature hook live"); }
 
   // Filter out sl.dlss_g's OWN evaluates (they carry DLSSG params; ours must only snoop
@@ -311,7 +314,9 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
     if(cmd && g_in.valid) SubmitFrameData(cmd);
   }
 
+  g_wdPos.store(11);
   NVSDK_NGX_Result r = o_NgxEvaluate(cmd,h,params,cb);
+  g_wdPos.store(12);
 
   // AFTER orig: SR just wrote Output (upscaled pre-UI color) - DLSS-G's required color source.
   if(!isDlssg && r==NGX_Success && cmd && params && g_in.valid && p_GetVoidPointer){
@@ -324,6 +329,7 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
     }
   }
   g_inEval=false;
+  g_wdPos.store(0);
   return r;
 }
 

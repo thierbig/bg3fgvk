@@ -82,6 +82,11 @@ static bool EnsureSlInit(){
   // (the working PureDark/nvapp stack ran under it). The SDK sample id has no NGX min-spec
   // data, so plugins self-disable on this GPU and DLSS-G never arms.
   p.applicationId = 0xE658703;
+  // Streamline's own verbose log - written next to the game exe; names the exact
+  // internal step DLSS-G is on when something wedges.
+  p.logLevel = sl::LogLevel::eVerbose;
+  static const wchar_t* kLogPath = L"C:\\Games\\Baldurs Gate 3\\bin";
+  p.pathToLogsAndData = kLogPath;
 
   sl::Result r = p_slInit(p, sl::kSDKVersion);
   Log("slInit -> %d", (int)r);
