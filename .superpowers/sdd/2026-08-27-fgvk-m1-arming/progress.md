@@ -20,3 +20,22 @@ Ruling: OnDeviceCreated declaration — T2 calls fgvk::OnDeviceCreated() but it'
 Ruling: build+launch verification — native Windows/Vulkan; subagents cannot build (no MSVC) or run BG3. Decision: implementers write files + self-check syntax by reading; the "build"/"in-game" steps are recorded as USER-RUN in the report, not executed by the subagent. Task reviews check code correctness against the plan, not runtime. — Why: the toolchain and game live on the user's Windows side. — Cost if wrong: a compile error slips to the user's build step instead of being caught by a subagent (acceptable; user builds each task anyway).
 
 ## Tasks
+Task 1: complete (commits d2c9505a..63e4e30, review clean — scaffold+logger+stubs)
+Task 2: complete (commits 63e4e308..3202a14, review clean — vkCreateInstance+Device hooks)
+Task 2: Ruling: gGraphicsQueue declared but unstored — not needed for M1 (slSetVulkanInfo uses family+index, not the VkQueue handle). Capture via vkGetDeviceQueue in M2 if tagging needs it. — Cost if wrong: one added vkGetDeviceQueue call in M2.
+Task 4 (pre-dispatch): Ruling: refined the M1 arming gate from header facts. DLSSGStatus enum (eOk=0; fail flags 2=Reflex-not-detected, 8=common-constants-invalid, 16=backbuffer-index) means M1 SUCCESS = ANY "DLSSG status=" line logged (proves DLSS-G is in the present loop, which direct-NGX never achieved); a fail-flag status is the M2 to-do list, not M1 failure. Also added slReflexSetOptions(eLowLatency) to OnDeviceCreated (DLSS-G requires Reflex; addresses status=2). VulkanInfo confirmed in sl_helpers_vk.h. — Cost if wrong: if arming truly needs eOk, we still learn the exact missing prereq from the status flag, so no wasted work.
+Task 3: complete (commits 3202a14b..d4979f9, review clean — swapchain+present routed to SL proxy; slboot.h include verified present)
+Task 4: implemented (commit 7855dda9) DONE_WITH_CONCERNS — SL core funcs (slInit/slSetVulkanInfo/slGetFeatureFunction) are extern SL_API with no import lib -> LNK2019.
+Task 4: fix round 1/5 dispatched (resume implementer) — convert to dynamic GetProcAddress resolution from sl.interposer.dll + slGetFeatureFunction for feature funcs (BG3SE-proven pattern). FIX_BASE 7855dda9.
+Task 4: fix round 1/5 (1 addressed, 0 open — SL dynamic resolution; commits 7855dda9..adb4319; re-review clean)
+Task 4: minor (deferred): g_sl load-with-fallback duplicated 3x — cosmetic, factor into a helper at cleanup.
+Task 4: complete (commits d4979f92..adb4319, review clean after 1 fix round — slInit+Reflex+DLSS-G enable+status poll, all SL calls dynamic)
+Task 5: complete (commit adb43190..fae33fc, controller-reviewed — docs/M1-result.md + BUILD.md correct)
+
+## Final whole-branch review (M1): SHIP with 3 Important diagnosability findings -> one fix wave
+- F1 vkhooks InstallVkHooks/RemoveVkHooks: Detours return codes discarded; "hooked" logged unconditionally.
+- F2 vkhooks InstallVkHooks: no null-check on vulkan-1.dll handle before GetProcAddress.
+- F3 slboot OnDeviceCreated: slSetVulkanInfo result not gated (proceeds even on failure).
+Fix-wave FIX_BASE fae33fc.
+Final fix wave: re-review clean (F1/F2/F3 all ADDRESSED, no new breakage; commits fae33fc0..8d571e3)
+M1 COMPLETE — 5 tasks, all reviewed; 1 build-blocker (SL linkage) + 3 diagnosability findings caught and fixed.

@@ -212,12 +212,14 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
   if(g_reqs.compQ>0){ g_slots.compFamily=findFamily(VK_QUEUE_COMPUTE_BIT,VK_QUEUE_GRAPHICS_BIT); addQ(g_slots.compFamily,g_reqs.compQ,g_slots.compIndex); }
   if(g_reqs.ofaQ>0){ g_slots.ofaFamily=findFamily(VK_QUEUE_OPTICAL_FLOW_BIT_NV,0); addQ(g_slots.ofaFamily,g_reqs.ofaQ,g_slots.ofaIndex); }
 
-  // features 1.2/1.3 (prepend SL's; game rarely chains these in BG3) + OFA feature
-  auto slF12 = sl::getVkPhysicalDeviceVulkan12Features((uint32_t)g_reqs.f12.size(), (const char**)nullptr);
-  auto slF13 = sl::getVkPhysicalDeviceVulkan13Features((uint32_t)g_reqs.f13.size(), (const char**)nullptr);
-  { std::vector<const char*> n12,n13; for(auto&x:g_reqs.f12) n12.push_back(x.c_str()); for(auto&x:g_reqs.f13) n13.push_back(x.c_str());
-    slF12 = sl::getVkPhysicalDeviceVulkan12Features((uint32_t)n12.size(), n12.data());
-    slF13 = sl::getVkPhysicalDeviceVulkan13Features((uint32_t)n13.size(), n13.data()); }
+  // features 1.2/1.3 (prepend SL's; game rarely chains these in BG3) + OFA feature.
+  // NOTE: getVkPhysicalDeviceVulkan1x Features dereferences the names array - never pass
+  // nullptr with a nonzero count (that was a crash right after 'SL reqs aggregated').
+  std::vector<const char*> n12,n13;
+  for(auto&x:g_reqs.f12) n12.push_back(x.c_str());
+  for(auto&x:g_reqs.f13) n13.push_back(x.c_str());
+  auto slF12 = sl::getVkPhysicalDeviceVulkan12Features((uint32_t)n12.size(), n12.empty()?nullptr:n12.data());
+  auto slF13 = sl::getVkPhysicalDeviceVulkan13Features((uint32_t)n13.size(), n13.empty()?nullptr:n13.data());
   VkPhysicalDeviceOpticalFlowFeaturesNV slOFA{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV };
   bool wantOFA = (g_reqs.ofaQ>0) && (g_slots.ofaFamily!=~0u); if(wantOFA) slOFA.opticalFlow=VK_TRUE;
 
