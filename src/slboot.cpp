@@ -212,9 +212,9 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
   if(g_reqs.compQ>0){ g_slots.compFamily=findFamily(VK_QUEUE_COMPUTE_BIT,VK_QUEUE_GRAPHICS_BIT); addQ(g_slots.compFamily,g_reqs.compQ,g_slots.compIndex); }
   if(g_reqs.ofaQ>0){ g_slots.ofaFamily=findFamily(VK_QUEUE_OPTICAL_FLOW_BIT_NV,0); addQ(g_slots.ofaFamily,g_reqs.ofaQ,g_slots.ofaIndex); }
 
-  // features 1.2/1.3 (prepend SL's; game rarely chains these in BG3) + OFA feature.
-  // NOTE: getVkPhysicalDeviceVulkan1x Features dereferences the names array - never pass
-  // nullptr with a nonzero count (that was a crash right after 'SL reqs aggregated').
+  // features 1.2/1.3: OR SL's required bits into the game's EXISTING chained struct if
+  // present (BG3 chains its own) - prepending a second Vulkan12Features with the same sType
+  // makes the driver reject the device (the crash inside the interposer's vkCreateDevice).
   std::vector<const char*> n12,n13;
   for(auto&x:g_reqs.f12) n12.push_back(x.c_str());
   for(auto&x:g_reqs.f13) n13.push_back(x.c_str());
@@ -223,19 +223,38 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
   VkPhysicalDeviceOpticalFlowFeaturesNV slOFA{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV };
   bool wantOFA = (g_reqs.ofaQ>0) && (g_slots.ofaFamily!=~0u); if(wantOFA) slOFA.opticalFlow=VK_TRUE;
 
+  // Scan the game's pNext for existing 1.2/1.3 feature structs.
+  VkPhysicalDeviceVulkan12Features* gameF12=nullptr;
+  VkPhysicalDeviceVulkan13Features* gameF13=nullptr;
+  for(auto node=(VkBaseOutStructure*)const_cast<void*>(ci->pNext); node; node=node->pNext){
+    if(node->sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) gameF12=(VkPhysicalDeviceVulkan12Features*)node;
+    if(node->sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) gameF13=(VkPhysicalDeviceVulkan13Features*)node;
+  }
+  // Save originals so we can restore the game's structs after create (we mutate in place).
+  VkPhysicalDeviceVulkan12Features saved12{}; VkPhysicalDeviceVulkan13Features saved13{};
+  if(gameF12) saved12=*gameF12;
+  if(gameF13) saved13=*gameF13;
+  // OR the VkBool32 payload (everything after the sType+pNext header).
+  auto orBits=[](void* dst, const void* src, size_t structSize){
+    const size_t hdr=sizeof(VkStructureType)+sizeof(void*); // sType + pNext
+    auto* d=(VkBool32*)((uint8_t*)dst+hdr); auto* s=(const VkBool32*)((const uint8_t*)src+hdr);
+    size_t n=(structSize-hdr)/sizeof(VkBool32); for(size_t i=0;i<n;i++) d[i]|=s[i]; };
+
   VkDeviceCreateInfo ext = *ci;
-  if(!g_reqs.f12.empty()){ slF12.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF12; }
-  if(!g_reqs.f13.empty()){ slF13.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF13; }
+  if(!g_reqs.f12.empty()){ if(gameF12) orBits(gameF12,&slF12,sizeof(slF12)); else { slF12.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF12; } }
+  if(!g_reqs.f13.empty()){ if(gameF13) orBits(gameF13,&slF13,sizeof(slF13)); else { slF13.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF13; } }
   if(wantOFA){ slOFA.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slOFA; }
   ext.enabledExtensionCount=(uint32_t)exts.size(); ext.ppEnabledExtensionNames=exts.data();
   ext.queueCreateInfoCount=(uint32_t)queues.size(); ext.pQueueCreateInfos=queues.data();
 
-  if(qfail){ Log("CreateDeviceWithSL: queue surgery failed limits -> plain proxy create"); return proxy(pd,ci,a,out); }
-  Log("CreateDeviceWithSL: extended (+%u ext) g=%u@%u c=%u@%u ofa=%u@%u",
+  auto restore=[&](){ if(gameF12)*gameF12=saved12; if(gameF13)*gameF13=saved13; };
+  if(qfail){ Log("CreateDeviceWithSL: queue surgery failed limits -> plain proxy create"); restore(); return proxy(pd,ci,a,out); }
+  Log("CreateDeviceWithSL: extended (+%u ext) g=%u@%u c=%u@%u ofa=%u@%u f12in=%p f13in=%p",
       (unsigned)(exts.size()-ci->enabledExtensionCount), g_slots.gfxFamily,g_slots.gfxIndex,
-      g_slots.compFamily,g_slots.compIndex,g_slots.ofaFamily,g_slots.ofaIndex);
+      g_slots.compFamily,g_slots.compIndex,g_slots.ofaFamily,g_slots.ofaIndex,(void*)gameF12,(void*)gameF13);
   VkResult r = proxy(pd,&ext,a,out);
   Log("CreateDeviceWithSL: interposer vkCreateDevice -> %d", (int)r);
+  restore();
   if(r!=VK_SUCCESS){ Log("CreateDeviceWithSL: extended failed -> plain proxy create"); return proxy(pd,ci,a,out); }
   return r;
 }
