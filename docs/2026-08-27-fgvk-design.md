@@ -53,6 +53,11 @@ config. No manual pacing, no worker threads, no queue-mutex management.
 - **MCM coexistence:** present the same proxy-swapchain interface PureDark's upscaler does,
   so the existing BG3SE compat SE overlay (`upscaler-run` branch) renders unchanged. Do NOT
   build our own ImGui.
+- **BG3SE compatibility (first-class, every milestone):** the injector must coexist with the
+  BG3 Script Extender at all times — its own Vulkan/NGX hooks must not conflict with BG3SE's
+  (shared hook targets are chained, never clobbered; install order tolerant), the DLL loads
+  through BG3SE's native plugin loader without displacing BG3SE, and the game must run stably
+  with BOTH loaded. Every milestone is validated with BG3SE present, not in isolation.
 
 ## Architecture — four small units
 
