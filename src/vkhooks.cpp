@@ -43,15 +43,15 @@ static VKAPI_ATTR VkResult VKAPI_CALL h_CreateDevice(
     const VkAllocationCallbacks* a, VkDevice* out) {
   if (g_inCreate) return o_CreateDevice(pd, ci, a, out);
   g_inCreate = true;
-  PFN_vkCreateDevice proxy = fgvk::SlProxyCreateDevice();
-  VkResult r = proxy ? proxy(pd, ci, a, out) : o_CreateDevice(pd, ci, a, out);
+  // SL device create-info surgery + interposer create (adds SL's extensions/features/queues).
+  VkResult r = fgvk::CreateDeviceWithSL(pd, ci, a, out);
   g_inCreate = false;
   if (r == VK_SUCCESS) {
     gPhysicalDevice = pd; gDevice = *out;
     // first graphics queue from ci
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){
       gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
-    Log("vkCreateDevice ok (proxy=%p) device=%p phys=%p gfxFamily=%u", (void*)proxy,(void*)gDevice,(void*)pd,gGraphicsFamily);
+    Log("vkCreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
     OnDeviceCreated();   // slboot: slSetVulkanInfo + DLSS-G enable
   }
   return r;
