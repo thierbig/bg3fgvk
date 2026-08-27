@@ -64,17 +64,24 @@ static VKAPI_ATTR VkResult VKAPI_CALL h_QueuePresentKHR(
 void InstallVkHooks(){
   HMODULE vk = GetModuleHandleA("vulkan-1.dll");
   if(!vk) vk = LoadLibraryA("vulkan-1.dll");
+  if (!vk) { Log("InstallVkHooks: vulkan-1.dll not found - aborting hook install"); return; }
   o_CreateInstance = (PFN_vkCreateInstance)GetProcAddress(vk,"vkCreateInstance");
   o_CreateDevice = (PFN_vkCreateDevice)GetProcAddress(vk,"vkCreateDevice");
   o_CreateSwapchainKHR = (PFN_vkCreateSwapchainKHR)GetProcAddress(vk,"vkCreateSwapchainKHR");
   o_QueuePresentKHR = (PFN_vkQueuePresentKHR)GetProcAddress(vk,"vkQueuePresentKHR");
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
-  DetourAttach(&(PVOID&)o_CreateInstance,(PVOID)h_CreateInstance);
-  DetourAttach(&(PVOID&)o_CreateDevice,(PVOID)h_CreateDevice);
-  DetourAttach(&(PVOID&)o_CreateSwapchainKHR,(PVOID)h_CreateSwapchainKHR);
-  DetourAttach(&(PVOID&)o_QueuePresentKHR,(PVOID)h_QueuePresentKHR);
-  DetourTransactionCommit();
-  Log("InstallVkHooks: CreateInstance+CreateDevice+CreateSwapchainKHR+QueuePresentKHR hooked (oInst=%p oDev=%p oSwap=%p oPresent=%p)", (void*)o_CreateInstance, (void*)o_CreateDevice, (void*)o_CreateSwapchainKHR, (void*)o_QueuePresentKHR);
+  LONG a1 = DetourAttach(&(PVOID&)o_CreateInstance,(PVOID)h_CreateInstance);
+  if(a1) Log("DetourAttach CreateInstance -> %ld", a1);
+  LONG a2 = DetourAttach(&(PVOID&)o_CreateDevice,(PVOID)h_CreateDevice);
+  if(a2) Log("DetourAttach CreateDevice -> %ld", a2);
+  LONG a3 = DetourAttach(&(PVOID&)o_CreateSwapchainKHR,(PVOID)h_CreateSwapchainKHR);
+  if(a3) Log("DetourAttach CreateSwapchainKHR -> %ld", a3);
+  LONG a4 = DetourAttach(&(PVOID&)o_QueuePresentKHR,(PVOID)h_QueuePresentKHR);
+  if(a4) Log("DetourAttach QueuePresentKHR -> %ld", a4);
+  LONG r = DetourTransactionCommit();
+  Log("InstallVkHooks: commit -> %ld", r);
+  if (r != NO_ERROR) { Log("InstallVkHooks: COMMIT FAILED err=%ld", r); return; }
+  Log("InstallVkHooks: hooked");
 }
 
 void RemoveVkHooks(){
@@ -83,7 +90,9 @@ void RemoveVkHooks(){
   DetourDetach(&(PVOID&)o_CreateDevice,(PVOID)h_CreateDevice);
   DetourDetach(&(PVOID&)o_CreateSwapchainKHR,(PVOID)h_CreateSwapchainKHR);
   DetourDetach(&(PVOID&)o_QueuePresentKHR,(PVOID)h_QueuePresentKHR);
-  DetourTransactionCommit();
+  LONG r = DetourTransactionCommit();
+  Log("RemoveVkHooks: commit -> %ld", r);
+  if (r != NO_ERROR) Log("RemoveVkHooks: COMMIT FAILED err=%ld", r);
 }
 
 PFN_vkCreateSwapchainKHR NativeCreateSwapchain(){ return o_CreateSwapchainKHR; }

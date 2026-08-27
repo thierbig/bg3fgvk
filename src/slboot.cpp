@@ -122,6 +122,7 @@ void OnDeviceCreated(){
   vi.graphicsQueueFamily = fgvk::gGraphicsFamily;
   sl::Result rVk = p_slSetVulkanInfo(vi);
   Log("slSetVulkanInfo -> %d", (int)rVk);
+  if (rVk != sl::Result::eOk) { Log("OnDeviceCreated: slSetVulkanInfo failed (%d) - aborting SL setup", (int)rVk); return; }
 
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
