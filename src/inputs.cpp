@@ -355,6 +355,10 @@ void NgxProbeTick(){
 
 // ---- PCL markers + reflex sleep per present -------------------------------------------
 void PresentMarkersBegin(){
+  // ALL SIX markers with ONE token, before the present - the SE's proven shape. Splitting
+  // PresentEnd to after the present pairs it with token N+1 (sl.common increments the frame
+  // counter DURING present), leaving every PresentStart dangling; the DLSS-G pacer keys on
+  // the pair and waits forever the moment generation starts (the 95%-load freeze).
   auto& fns = GetSlFns();
   if(!fns.getNewFrameToken || !fns.pclSetMarker) return;
   sl::FrameToken* token=nullptr;
@@ -365,13 +369,10 @@ void PresentMarkersBegin(){
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*token);
   fns.pclSetMarker(sl::PCLMarker::ePresentStart,*token);
+  fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*token);
 }
 void PresentMarkersEnd(){
-  auto& fns = GetSlFns();
-  if(!fns.getNewFrameToken || !fns.pclSetMarker) return;
-  sl::FrameToken* token=nullptr;
-  if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return;
-  fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*token);
+  // intentionally empty - see PresentMarkersBegin
 }
 
 }
