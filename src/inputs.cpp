@@ -227,7 +227,7 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   c.cameraFwd = sl::float3(0,0,1);
   c.cameraNear = 0.05f; c.cameraFar = 10000.f;
   c.cameraFOV = 0.84f; c.cameraAspectRatio = aspect;
-  c.depthInverted = sl::Boolean::eFalse;
+  c.depthInverted = sl::Boolean::eTrue;   // PureDark capture: DepthInverted=1 (BG3 reverse-Z)
   c.cameraMotionIncluded = sl::Boolean::eTrue;
   c.motionVectors3D = sl::Boolean::eFalse;
   c.motionVectorsJittered = sl::Boolean::eFalse;
