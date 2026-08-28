@@ -99,22 +99,33 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
 }
 
 // ---- the single entry hook: vkGetInstanceProcAddr ---------------------------------------
+// Init is DEFERRED to the vkCreateInstance resolution, NOT the first GIPA call: the game's
+// first GIPA resolution happens in early loader-lock context, where slInit (which LoadLibrary's
+// plugins) deadlocks (observed: log stops right after 'resolved slInit=...', game hangs).
+// PureDark inits around instance creation for the same reason. We resolve the interposer's
+// GIPA/GDPA FIRST so slInit's own re-entrant GIPA calls see the interposer, not the raw loader.
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetInstanceProcAddr(VkInstance inst, const char* name){
-  // slInit BEFORE the game creates its instance, so the interposer is initialized when the
-  // game resolves vkCreateInstance from it.
-  static bool inited=false;
-  if(!inited){ inited=true; EnsureStreamlineInit();
-    if(!ip_GIPA){ ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr"); }
-    if(!ip_GDPA){ ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr"); }
-    Log("h_GetInstanceProcAddr first call: ip_GIPA=%p ip_GDPA=%p", (void*)ip_GIPA,(void*)ip_GDPA);
-  }
   if(!name) return nullptr;
-  // Forward to the interposer's GIPA (SL owns the dispatch); fall back to the real loader.
+
+  if(!strcmp(name,"vkCreateInstance")){
+    static bool inited=false;
+    if(!inited){ inited=true;
+      ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr");  // loads interposer, set FIRST
+      ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr");
+      EnsureStreamlineInit();   // slInit now (normal execution, no loader lock)
+      Log("SL init on vkCreateInstance resolve: ip_GIPA=%p ip_GDPA=%p", (void*)ip_GIPA,(void*)ip_GDPA);
+    }
+    PFN_vkVoidFunction ip = ip_GIPA ? ip_GIPA(inst,name) : (o_GIPA?o_GIPA(inst,name):nullptr);
+    if(ip){ t_CreateInstance=(PFN_vkCreateInstance)ip; return (PFN_vkVoidFunction)w_CreateInstance; }
+    return nullptr;
+  }
+
+  // Everything else: interposer if ready, else the real loader (enumeration fns before
+  // vkCreateInstance don't need the interposer).
   PFN_vkVoidFunction ip = ip_GIPA ? ip_GIPA(inst, name) : nullptr;
   if(!ip) ip = o_GIPA ? o_GIPA(inst, name) : nullptr;
   if(!ip) return nullptr;
   if(!strcmp(name,"vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)h_GetInstanceProcAddr;
-  if(!strcmp(name,"vkCreateInstance"))  { t_CreateInstance = (PFN_vkCreateInstance)ip; return (PFN_vkVoidFunction)w_CreateInstance; }
   if(!strcmp(name,"vkCreateDevice"))    { t_CreateDevice   = (PFN_vkCreateDevice)ip;   return (PFN_vkVoidFunction)w_CreateDevice; }
   if(!strcmp(name,"vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)w_GetDeviceProcAddr;
   return ip;
