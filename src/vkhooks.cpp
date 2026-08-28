@@ -110,7 +110,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
 // NvLowLatencyVk, and double-driving it gives the DLSS-G pacer conflicting frame markers
 // (observed: pacer cadence collapses, acquireNextBuffer times out, present loop stalls).
 // Flip to true only if generation stops without our markers (i.e. native Reflex isn't enough).
-static const bool kEmitOurMarkers = false;
+static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; slReflexSleep dropped inside
 
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();

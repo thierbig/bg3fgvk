@@ -382,7 +382,10 @@ void PresentMarkersBegin(){
   if(!fns.getNewFrameToken || !fns.pclSetMarker) return;
   sl::FrameToken* token=nullptr;
   if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return;
-  if(fns.reflexSleep) fns.reflexSleep(*token);
+  // NO slReflexSleep: BG3 drives Reflex natively (NvLowLatencyVk); our sleep double-paces the
+  // frame and destabilizes the DLSS-G pacer (acquire timeouts -> present stall). We keep the
+  // PCL markers - they advance sl.common's frame counter that the +1-shifted constants key to
+  // (without them: 'missing common constants -> FG disabled'), but let native Reflex do the sleep.
   fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*token);
   fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*token);
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
