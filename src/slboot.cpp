@@ -76,7 +76,12 @@ static bool EnsureSlInit(){
   // NO eUseManualHooking: BG3SE found the hybrid (manual-hooking flag + interposer-driven
   // instance/device creation) crashes inside initializePlugins during the interposer's
   // vkCreateDevice - our exact crash after slInit. Let the interposer own creation.
-  p.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;  // needed by slSetTagForFrame (M2)
+  // EXPLICIT flags - the default includes eAllowOTA|eLoadDownloadedPlugins, and mixing
+  // OTA-downloaded newer plugins with our version-matched 2.12.0 interposer crashes inside
+  // initializePlugins with no log line (BG3SE hit and documented this exact crash; we ship
+  // the full matched runtime, so OTA must stay off).
+  p.flags = sl::PreferenceFlags::eDisableCLStateTracking
+          | sl::PreferenceFlags::eUseFrameBasedResourceTagging;   // slSetTagForFrame needs this
   p.renderAPI = sl::RenderAPI::eVulkan;
   // applicationId 0xE658703: the NGX app-id family NVIDIA's driver serves on this machine
   // (the working PureDark/nvapp stack ran under it). The SDK sample id has no NGX min-spec
