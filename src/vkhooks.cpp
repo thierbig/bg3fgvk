@@ -58,8 +58,25 @@ struct GlobalReal { GlobalReal(){ ++g_globalReal; } ~GlobalReal(){ --g_globalRea
 static inline bool ForceReal(){ return g_reentry || g_globalReal.load(std::memory_order_acquire); }
 
 // ---- thin wrappers: call the INTERPOSER target, capture/act, return ----------------------
+// slInit runs HERE (in the actual vkCreateInstance CALL), never in the GIPA resolve: the
+// resolve runs inside the game's vkGetInstanceProcAddr which holds the Vulkan loader lock, and
+// slInit's plugin LoadLibrary -> DllMain needs that same lock = deadlock (the slInit hang, no
+// sl.log). The create CALL runs in normal execution, lock released.
+static void EnsureSlAndInterposer(){
+  static bool inited=false; if(inited) return; inited=true;
+  Reentry _; GlobalReal _g;   // interposer load + slInit forward to the real loader (all threads)
+  ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr");
+  ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr");
+  EnsureStreamlineInit();   // slInit
+  Log("SL init in w_CreateInstance: ip_GIPA=%p ip_GDPA=%p", (void*)ip_GIPA,(void*)ip_GDPA);
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateInstance(
     const VkInstanceCreateInfo* ci, const VkAllocationCallbacks* a, VkInstance* out){
+  EnsureSlAndInterposer();   // slInit here (loader lock released), NOT in the GIPA resolve
+  // Resolve the interposer's vkCreateInstance now that SL is initialized.
+  if(!t_CreateInstance){ Reentry _; t_CreateInstance = (PFN_vkCreateInstance)(ip_GIPA ? ip_GIPA(nullptr,"vkCreateInstance") : nullptr); }
+  if(!t_CreateInstance){ Log("w_CreateInstance: no interposer vkCreateInstance"); return VK_ERROR_INITIALIZATION_FAILED; }
   VkResult r; { Reentry _; r = t_CreateInstance(ci, a, out); }
   if (r == VK_SUCCESS){ gInstance = *out; Log("w_CreateInstance ok instance=%p", (void*)gInstance); }
   return r;
@@ -127,23 +144,15 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetInstanceProcAddr(VkInstance
   // Re-entrant (interposer forwarding to the driver): straight to the real loader.
   if(ForceReal()) return o_GIPA ? o_GIPA(inst, name) : nullptr;
 
-  if(!strcmp(name,"vkCreateInstance")){
-    static bool inited=false;
-    if(!inited){ inited=true;
-      Reentry _; GlobalReal _g;   // ALL threads -> real loader during interposer load + slInit
-      ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr");  // loads interposer, set FIRST
-      ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr");
-      EnsureStreamlineInit();   // slInit
-      Log("SL init on vkCreateInstance resolve: ip_GIPA=%p ip_GDPA=%p", (void*)ip_GIPA,(void*)ip_GDPA);
-    }
-    PFN_vkVoidFunction ip; { Reentry _; ip = ip_GIPA ? ip_GIPA(inst,name) : (o_GIPA?o_GIPA(inst,name):nullptr); }
-    if(ip){ t_CreateInstance=(PFN_vkCreateInstance)ip; return (PFN_vkVoidFunction)w_CreateInstance; }
-    return nullptr;
-  }
+  // vkCreateInstance: return our wrapper WITHOUT initializing SL here (this runs under the
+  // loader lock). slInit + interposer resolution happen inside w_CreateInstance (the CALL).
+  if(!strcmp(name,"vkCreateInstance")) return (PFN_vkVoidFunction)w_CreateInstance;
 
-  // Everything else: interposer if ready, else the real loader (enumeration fns before
-  // vkCreateInstance don't need the interposer).
-  PFN_vkVoidFunction ip; { Reentry _; ip = ip_GIPA ? ip_GIPA(inst, name) : nullptr; }
+  // Everything else: interposer if ready, else the real loader. Before slInit (ip_GIPA null),
+  // the game's dispatch build goes to the real loader - correct, we only need the interposer
+  // for create/present, which we swap in below once ready.
+  PFN_vkVoidFunction ip = nullptr;
+  if(ip_GIPA){ Reentry _; ip = ip_GIPA(inst, name); }
   if(!ip) ip = o_GIPA ? o_GIPA(inst, name) : nullptr;
   if(!ip) return nullptr;
   if(!strcmp(name,"vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)h_GetInstanceProcAddr;
