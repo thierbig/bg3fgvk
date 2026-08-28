@@ -200,16 +200,70 @@ static void FetchSLRequirements(){
 
 VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
                             const VkAllocationCallbacks* a, VkDevice* out){
-  // PLAIN PASSTHROUGH to the interposer (PureDark parity). Its own vkCreateDevice does the
-  // surgery itself - the SL log shows it adding plugin-requested extensions and finding queue
-  // families - and our manual injection triggered VUID-02830 (the game already chains those
-  // features individually), poisoning plugin init. Hand it the game's untouched create-info.
+  // FULL INTERPOSER OWNERSHIP (PureDark parity): the interposer's vkCreateDevice already
+  // proved it works here (returned 0 earlier tonight); what crashed then was the
+  // slSetVulkanInfo we called AFTER it - a manual-integration call that double-registers an
+  // interposer-owned device. Interposer-created device = SL tracks it and its queues, so the
+  // pacer accepts the present queue ('Invalid VK app queue' was the generation-start freeze).
   PFN_vkCreateDevice proxy = SlProxyCreateDevice();
   if(!proxy){ Log("CreateDeviceWithSL: no interposer vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
-  FetchSLRequirements();   // logging only - the interposer handles its own requirements
-  Log("CreateDeviceWithSL: passthrough to interposer (no manual surgery)");
-  VkResult r = proxy(pd, ci, a, out);
+  FetchSLRequirements();
+  if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
+
+  auto pQFP = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)GetProcAddress(
+      GetModuleHandleA("vulkan-1.dll"), "vkGetPhysicalDeviceQueueFamilyProperties");
+  uint32_t famCount=0; if(pQFP) pQFP(pd,&famCount,nullptr);
+  std::vector<VkQueueFamilyProperties> fams(famCount); if(pQFP&&famCount) pQFP(pd,&famCount,fams.data());
+  auto findFamily=[&](VkQueueFlags req, VkQueueFlags absent)->uint32_t{
+    uint32_t fb=~0u;
+    for(uint32_t i=0;i<famCount;i++){ if((fams[i].queueFlags&req)!=req) continue;
+      if((fams[i].queueFlags&absent)==0) return i; if(fb==~0u) fb=i; }
+    return fb; };
+
+  // extensions (dedup-add)
+  std::vector<const char*> exts(ci->ppEnabledExtensionNames, ci->ppEnabledExtensionNames+ci->enabledExtensionCount);
+  for(auto& w: g_reqs.devExt){ bool have=false; for(auto e: exts) if(w==e){have=true;break;} if(!have) exts.push_back(w.c_str()); }
+
+  // queues (copy game's, append SL's compute + OFA)
+  std::vector<VkDeviceQueueCreateInfo> queues(ci->pQueueCreateInfos, ci->pQueueCreateInfos+ci->queueCreateInfoCount);
+  std::vector<std::vector<float>> prio;
+  bool qfail=false;
+  auto addQ=[&](uint32_t family, uint32_t extra, uint32_t& outIdx){
+    if(extra==0||family==~0u){ if(extra>0) qfail=true; return; }
+    for(auto& q: queues){ if(q.queueFamilyIndex!=family) continue;
+      if(q.queueCount+extra>fams[family].queueCount){ qfail=true; return; }
+      outIdx=q.queueCount; prio.emplace_back(q.queueCount+extra,1.0f);
+      if(q.pQueuePriorities) std::copy(q.pQueuePriorities,q.pQueuePriorities+q.queueCount,prio.back().begin());
+      q.queueCount+=extra; q.pQueuePriorities=prio.back().data(); return; }
+    if(extra>fams[family].queueCount){ qfail=true; return; }
+    outIdx=0; prio.emplace_back(extra,1.0f);
+    queues.push_back(VkDeviceQueueCreateInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,nullptr,0,family,extra,prio.back().data()}); };
+
+  g_slots = SLSlots{};
+  g_slots.gfxFamily = findFamily(VK_QUEUE_GRAPHICS_BIT,0);
+  if(g_reqs.gfxQ>0) addQ(g_slots.gfxFamily, g_reqs.gfxQ, g_slots.gfxIndex);
+  if(g_reqs.compQ>0){ g_slots.compFamily=findFamily(VK_QUEUE_COMPUTE_BIT,VK_QUEUE_GRAPHICS_BIT); addQ(g_slots.compFamily,g_reqs.compQ,g_slots.compIndex); }
+  if(g_reqs.ofaQ>0){ g_slots.ofaFamily=findFamily(VK_QUEUE_OPTICAL_FLOW_BIT_NV,0); addQ(g_slots.ofaFamily,g_reqs.ofaQ,g_slots.ofaIndex); }
+
+  // Features 1.2/1.3 are the interposer's job (it chains its own; ours triggered VUID-02830).
+  // We add ONLY what it demonstrably does not: the optical-flow feature struct (the passthrough
+  // runs showed no VK_NV_optical_flow extension and no OFA queue family in its log - dlss_g
+  // then calls a null OFA function pointer: the confirmed exec-at-0 crash in plugin init).
+  VkPhysicalDeviceOpticalFlowFeaturesNV slOFA{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV };
+  bool wantOFA = (g_reqs.ofaQ>0) && (g_slots.ofaFamily!=~0u); if(wantOFA) slOFA.opticalFlow=VK_TRUE;
+
+  VkDeviceCreateInfo ext = *ci;
+  if(wantOFA){ slOFA.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slOFA; }
+  ext.enabledExtensionCount=(uint32_t)exts.size(); ext.ppEnabledExtensionNames=exts.data();
+  ext.queueCreateInfoCount=(uint32_t)queues.size(); ext.pQueueCreateInfos=queues.data();
+
+  if(qfail){ Log("CreateDeviceWithSL: queue surgery failed limits -> plain proxy create"); return proxy(pd,ci,a,out); }
+  Log("CreateDeviceWithSL: extended (+%u ext) g=%u@%u c=%u@%u ofa=%u@%u ofaFeature=%d",
+      (unsigned)(exts.size()-ci->enabledExtensionCount), g_slots.gfxFamily,g_slots.gfxIndex,
+      g_slots.compFamily,g_slots.compIndex,g_slots.ofaFamily,g_slots.ofaIndex,(int)wantOFA);
+  VkResult r = proxy(pd,&ext,a,out);
   Log("CreateDeviceWithSL: interposer vkCreateDevice -> %d", (int)r);
+  if(r!=VK_SUCCESS){ Log("CreateDeviceWithSL: extended failed -> plain proxy create"); return proxy(pd,ci,a,out); }
   return r;
 }
 
