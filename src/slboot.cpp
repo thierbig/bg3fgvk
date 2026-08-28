@@ -61,14 +61,15 @@ static bool EnsureSlInit(){
   static const sl::Feature feats[] = { sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
   p.featuresToLoad = feats;
   p.numFeaturesToLoad = 3;
-  // NO eUseManualHooking: BG3SE found the hybrid (manual-hooking flag + interposer-driven
-  // instance/device creation) crashes inside initializePlugins during the interposer's
-  // vkCreateDevice - our exact crash after slInit. Let the interposer own creation.
-  // EXPLICIT flags - the default includes eAllowOTA|eLoadDownloadedPlugins, and mixing
-  // OTA-downloaded newer plugins with our version-matched 2.12.0 interposer crashes inside
-  // initializePlugins with no log line (BG3SE hit and documented this exact crash; we ship
-  // the full matched runtime, so OTA must stay off).
+  // eUseManualHooking IS REQUIRED for the GIPA-interposition model: WE hook vkGetInstanceProcAddr
+  // and drive the interposer. Without this flag, slInit tries to install its OWN Vulkan
+  // interception, which collides with our in-place GIPA Detour and HANGS slInit (observed: log
+  // stops at 'resolved slInit=', no sl.log, game hangs). Manual hooking = slInit skips self-
+  // hooking because we're driving. (The earlier BG3SE crash was manual-hooking + a DIFFERENT
+  // hybrid that also called slSetVulkanInfo; here we own the whole GIPA chain instead.)
+  // Explicit flags: default includes eAllowOTA|eLoadDownloadedPlugins - OTA off (matched 2.12.0).
   p.flags = sl::PreferenceFlags::eDisableCLStateTracking
+          | sl::PreferenceFlags::eUseManualHooking
           | sl::PreferenceFlags::eUseFrameBasedResourceTagging;   // slSetTagForFrame needs this
   p.renderAPI = sl::RenderAPI::eVulkan;
   // applicationId 0xE658703: the NGX app-id family NVIDIA's driver serves on this machine
