@@ -205,8 +205,11 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
   // slSetVulkanInfo we called AFTER it - a manual-integration call that double-registers an
   // interposer-owned device. Interposer-created device = SL tracks it and its queues, so the
   // pacer accepts the present queue ('Invalid VK app queue' was the generation-start freeze).
-  PFN_vkCreateDevice proxy = SlProxyCreateDevice();
-  if(!proxy){ Log("CreateDeviceWithSL: no interposer vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
+  // NATIVE create: the interposer's own vkCreateDevice crashes in initializePlugins
+  // (confirmed by crash dump: exec-at-null; BG3SE documented the same). Native device +
+  // slSetVulkanInfo is the path that survives plugin init, arms DLSS-G, and feeds inputs.
+  PFN_vkCreateDevice proxy = fgvk::NativeCreateDevice();
+  if(!proxy){ Log("CreateDeviceWithSL: no native vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
   FetchSLRequirements();
   if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
 
@@ -270,10 +273,21 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
 void OnDeviceCreated(){
   if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit failed, skipping SL device setup"); return; }
 
-  // Interposer owns the device: it registered device+queues during its vkCreateDevice.
-  // slSetVulkanInfo is for the manual path only and crashed when combined with interposer
-  // ownership - skip it entirely.
-  Log("interposer owns device - slSetVulkanInfo skipped");
+  sl::VulkanInfo vi{};
+  vi.device = fgvk::gDevice;
+  vi.instance = fgvk::gInstance;
+  vi.physicalDevice = fgvk::gPhysicalDevice;
+  // GRAPHICS/present queue = the GAME's actual queue (family 0, index 0). The game presents
+  // on this; SL must match it here or the pacer rejects it ('Invalid VK app queue').
+  vi.graphicsQueueIndex = 0;
+  vi.graphicsQueueFamily = fgvk::gGraphicsFamily;
+  // COMPUTE/OFA = SL's own surgery-allocated queues (the extras we added past the game's).
+  vi.computeQueueIndex = g_slots.compIndex; vi.computeQueueFamily = (g_slots.compFamily!=~0u)?g_slots.compFamily:fgvk::gGraphicsFamily;
+  vi.opticalFlowQueueIndex = g_slots.ofaIndex; vi.opticalFlowQueueFamily = (g_slots.ofaFamily!=~0u)?g_slots.ofaFamily:0;
+  sl::Result rVk = p_slSetVulkanInfo(vi);
+  Log("slSetVulkanInfo -> %d (gfx %u@0, comp %u@%u, ofa %u@%u)", (int)rVk,
+      vi.graphicsQueueFamily, vi.computeQueueFamily, vi.computeQueueIndex, vi.opticalFlowQueueFamily, vi.opticalFlowQueueIndex);
+  if (rVk != sl::Result::eOk) { Log("OnDeviceCreated: slSetVulkanInfo failed (%d)", (int)rVk); return; }
 
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 

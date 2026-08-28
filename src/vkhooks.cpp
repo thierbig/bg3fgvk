@@ -215,19 +215,16 @@ static VKAPI_ATTR VkResult VKAPI_CALL hd_QueuePresentKHR(
 
 static VKAPI_ATTR void VKAPI_CALL hd_GetDeviceQueue(
     VkDevice dev, uint32_t family, uint32_t index, VkQueue* pQueue){
-  auto proxy = (PFN_vkGetDeviceQueue)SlProxyFn("vkGetDeviceQueue");
-  if (proxy) proxy(dev, family, index, pQueue); else d_GetDeviceQueue(dev, family, index, pQueue);
+  // NATIVE getter - device is native, so the interposer's getter cannot serve it. SL learns
+  // the present queue from slSetVulkanInfo's family/index instead.
+  d_GetDeviceQueue(dev, family, index, pQueue);
   static bool logged=false; if(!logged){ logged=true;
-    Log("vkGetDeviceQueue routed via interposer=%p queue=%p (SL now tracks the present queue)",
-        (void*)proxy, pQueue?(void*)*pQueue:nullptr); }
+    Log("vkGetDeviceQueue (native) queue=%p", pQueue?(void*)*pQueue:nullptr); }
 }
 
 static VKAPI_ATTR void VKAPI_CALL hd_GetDeviceQueue2(
     VkDevice dev, const VkDeviceQueueInfo2* info, VkQueue* pQueue){
-  auto proxy = (PFN_vkGetDeviceQueue2)SlProxyFn("vkGetDeviceQueue2");
-  if (proxy) proxy(dev, info, pQueue); else d_GetDeviceQueue2(dev, info, pQueue);
-  static bool logged=false; if(!logged){ logged=true;
-    Log("vkGetDeviceQueue2 routed via interposer=%p queue=%p", (void*)proxy, pQueue?(void*)*pQueue:nullptr); }
+  d_GetDeviceQueue2(dev, info, pQueue);
 }
 
 static VKAPI_ATTR VkResult VKAPI_CALL hd_QueueSubmit(
