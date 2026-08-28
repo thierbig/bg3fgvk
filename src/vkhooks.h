@@ -8,8 +8,8 @@ extern VkDevice gDevice;
 extern VkQueue gGraphicsQueue;
 extern uint32_t gGraphicsFamily;
 
-PFN_vkCreateSwapchainKHR NativeCreateSwapchain();
-PFN_vkCreateDevice NativeCreateDevice();
+void* DeviceFn(const char* name);
+void* LoaderFn(const char* name);
 
 void InstallVkHooks();
 void RemoveVkHooks();

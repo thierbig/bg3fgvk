@@ -20,19 +20,7 @@ static HMODULE g_sl{};
 static SlFns g_slFns;
 SlFns& GetSlFns(){ return g_slFns; }
 
-PFN_vkCreateSwapchainKHR SlProxyCreateSwapchain(){
-  if(!g_sl){ g_sl = GetModuleHandleA("sl.interposer.dll");
-    if(!g_sl) g_sl = LoadLibraryA("sl.interposer.dll");
-    Log("sl.interposer handle=%p", (void*)g_sl); }
-  return g_sl ? (PFN_vkCreateSwapchainKHR)GetProcAddress(g_sl,"vkCreateSwapchainKHR") : nullptr;
-}
 
-PFN_vkQueuePresentKHR SlProxyPresent(){
-  if(!g_sl){ g_sl = GetModuleHandleA("sl.interposer.dll");
-    if(!g_sl) g_sl = LoadLibraryA("sl.interposer.dll");
-    Log("sl.interposer handle=%p", (void*)g_sl); }
-  return g_sl ? (PFN_vkQueuePresentKHR)GetProcAddress(g_sl,"vkQueuePresentKHR") : nullptr;
-}
 
 // --- Streamline function pointers, resolved dynamically from sl.interposer.dll ---
 // No SL import lib is linked (see CMakeLists: only detours.lib). Every SL entry
@@ -147,148 +135,16 @@ static bool EnsureFeatureFunctions(){
 }
 
 bool EnsureStreamlineInit(){ return EnsureSlInit(); }
-PFN_vkCreateInstance SlProxyCreateInstance(){
-  if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
-  return g_sl ? (PFN_vkCreateInstance)GetProcAddress(g_sl,"vkCreateInstance") : nullptr;
-}
 void* SlProxyFn(const char* name){
   if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
   return g_sl ? (void*)GetProcAddress(g_sl, name) : nullptr;
 }
-PFN_vkCreateDevice SlProxyCreateDevice(){
-  if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
-  return g_sl ? (PFN_vkCreateDevice)GetProcAddress(g_sl,"vkCreateDevice") : nullptr;
-}
-
-// ---- SL device create-info surgery (ported from BG3SE Vulkan.inl) -------------------
-// DLSS-G needs extra device extensions, Vulkan1.2/1.3 features, a compute queue and an
-// optical-flow queue injected into VkDeviceCreateInfo before the interposer builds the
-// device. Skipping this crashes inside the interposer's vkCreateDevice.
-static PFun_slGetFeatureRequirements* p_slGetFeatureReqs = nullptr;
-
-struct SLSlots { uint32_t gfxFamily=~0u, gfxIndex=0, compFamily=~0u, compIndex=0, ofaFamily=~0u, ofaIndex=0; };
-SLSlots g_slots;
-
-struct SLReqs { std::vector<std::string> devExt, f12, f13; uint32_t gfxQ=0, compQ=0, ofaQ=0; bool valid=false; };
-static SLReqs g_reqs;
-static void addUniq(std::vector<std::string>& v, const char* s){ for(auto&e:v) if(e==s) return; v.emplace_back(s); }
-
-static void FetchSLRequirements(){
-  if(g_reqs.valid) return;
-  if(!p_slGetFeatureReqs){ if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); } if(g_sl) p_slGetFeatureReqs=(PFun_slGetFeatureRequirements*)GetProcAddress(g_sl,"slGetFeatureRequirements"); }
-  if(!p_slGetFeatureReqs){ Log("FetchSLRequirements: slGetFeatureRequirements not resolved"); return; }
-  sl::Feature feats[]={ sl::kFeatureDLSS_G, sl::kFeatureReflex, sl::kFeaturePCL };
-  for(auto f: feats){
-    sl::FeatureRequirements req{};
-    sl::Result r=p_slGetFeatureReqs(f, req);
-    Log("slGetFeatureRequirements(%u) -> %d ext=%u f12=%u f13=%u gfxQ=%u compQ=%u ofaQ=%u",
-        (unsigned)f,(int)r,req.vkNumDeviceExtensions,req.vkNumFeatures12,req.vkNumFeatures13,
-        req.vkNumGraphicsQueuesRequired,req.vkNumComputeQueuesRequired,req.vkNumOpticalFlowQueuesRequired);
-    if(r!=sl::Result::eOk) continue;
-    for(uint32_t i=0;i<req.vkNumDeviceExtensions;i++) addUniq(g_reqs.devExt, req.vkDeviceExtensions[i]);
-    for(uint32_t i=0;i<req.vkNumFeatures12;i++) addUniq(g_reqs.f12, req.vkFeatures12[i]);
-    for(uint32_t i=0;i<req.vkNumFeatures13;i++) addUniq(g_reqs.f13, req.vkFeatures13[i]);
-    g_reqs.gfxQ=(std::max)(g_reqs.gfxQ, req.vkNumGraphicsQueuesRequired);
-    g_reqs.compQ=(std::max)(g_reqs.compQ, req.vkNumComputeQueuesRequired);
-    g_reqs.ofaQ=(std::max)(g_reqs.ofaQ, req.vkNumOpticalFlowQueuesRequired);
-    g_reqs.valid=true;
-  }
-  Log("SL reqs aggregated: devExt=%u f12=%u f13=%u gfxQ=%u compQ=%u ofaQ=%u",
-      (unsigned)g_reqs.devExt.size(),(unsigned)g_reqs.f12.size(),(unsigned)g_reqs.f13.size(),
-      g_reqs.gfxQ,g_reqs.compQ,g_reqs.ofaQ);
-}
-
-VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
-                            const VkAllocationCallbacks* a, VkDevice* out){
-  // FULL INTERPOSER OWNERSHIP (PureDark parity): the interposer's vkCreateDevice already
-  // proved it works here (returned 0 earlier tonight); what crashed then was the
-  // slSetVulkanInfo we called AFTER it - a manual-integration call that double-registers an
-  // interposer-owned device. Interposer-created device = SL tracks it and its queues, so the
-  // pacer accepts the present queue ('Invalid VK app queue' was the generation-start freeze).
-  // NATIVE create: the interposer's own vkCreateDevice crashes in initializePlugins
-  // (confirmed by crash dump: exec-at-null; BG3SE documented the same). Native device +
-  // slSetVulkanInfo is the path that survives plugin init, arms DLSS-G, and feeds inputs.
-  PFN_vkCreateDevice proxy = fgvk::NativeCreateDevice();
-  if(!proxy){ Log("CreateDeviceWithSL: no native vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
-  FetchSLRequirements();
-  if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
-
-  auto pQFP = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)GetProcAddress(
-      GetModuleHandleA("vulkan-1.dll"), "vkGetPhysicalDeviceQueueFamilyProperties");
-  uint32_t famCount=0; if(pQFP) pQFP(pd,&famCount,nullptr);
-  std::vector<VkQueueFamilyProperties> fams(famCount); if(pQFP&&famCount) pQFP(pd,&famCount,fams.data());
-  auto findFamily=[&](VkQueueFlags req, VkQueueFlags absent)->uint32_t{
-    uint32_t fb=~0u;
-    for(uint32_t i=0;i<famCount;i++){ if((fams[i].queueFlags&req)!=req) continue;
-      if((fams[i].queueFlags&absent)==0) return i; if(fb==~0u) fb=i; }
-    return fb; };
-
-  // extensions (dedup-add)
-  std::vector<const char*> exts(ci->ppEnabledExtensionNames, ci->ppEnabledExtensionNames+ci->enabledExtensionCount);
-  for(auto& w: g_reqs.devExt){ bool have=false; for(auto e: exts) if(w==e){have=true;break;} if(!have) exts.push_back(w.c_str()); }
-
-  // queues (copy game's, append SL's compute + OFA)
-  std::vector<VkDeviceQueueCreateInfo> queues(ci->pQueueCreateInfos, ci->pQueueCreateInfos+ci->queueCreateInfoCount);
-  std::vector<std::vector<float>> prio;
-  bool qfail=false;
-  auto addQ=[&](uint32_t family, uint32_t extra, uint32_t& outIdx){
-    if(extra==0||family==~0u){ if(extra>0) qfail=true; return; }
-    for(auto& q: queues){ if(q.queueFamilyIndex!=family) continue;
-      if(q.queueCount+extra>fams[family].queueCount){ qfail=true; return; }
-      outIdx=q.queueCount; prio.emplace_back(q.queueCount+extra,1.0f);
-      if(q.pQueuePriorities) std::copy(q.pQueuePriorities,q.pQueuePriorities+q.queueCount,prio.back().begin());
-      q.queueCount+=extra; q.pQueuePriorities=prio.back().data(); return; }
-    if(extra>fams[family].queueCount){ qfail=true; return; }
-    outIdx=0; prio.emplace_back(extra,1.0f);
-    queues.push_back(VkDeviceQueueCreateInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,nullptr,0,family,extra,prio.back().data()}); };
-
-  g_slots = SLSlots{};
-  g_slots.gfxFamily = findFamily(VK_QUEUE_GRAPHICS_BIT,0);
-  if(g_reqs.gfxQ>0) addQ(g_slots.gfxFamily, g_reqs.gfxQ, g_slots.gfxIndex);
-  if(g_reqs.compQ>0){ g_slots.compFamily=findFamily(VK_QUEUE_COMPUTE_BIT,VK_QUEUE_GRAPHICS_BIT); addQ(g_slots.compFamily,g_reqs.compQ,g_slots.compIndex); }
-  if(g_reqs.ofaQ>0){ g_slots.ofaFamily=findFamily(VK_QUEUE_OPTICAL_FLOW_BIT_NV,0); addQ(g_slots.ofaFamily,g_reqs.ofaQ,g_slots.ofaIndex); }
-
-  // Features 1.2/1.3 are the interposer's job (it chains its own; ours triggered VUID-02830).
-  // We add ONLY what it demonstrably does not: the optical-flow feature struct (the passthrough
-  // runs showed no VK_NV_optical_flow extension and no OFA queue family in its log - dlss_g
-  // then calls a null OFA function pointer: the confirmed exec-at-0 crash in plugin init).
-  VkPhysicalDeviceOpticalFlowFeaturesNV slOFA{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV };
-  bool wantOFA = (g_reqs.ofaQ>0) && (g_slots.ofaFamily!=~0u); if(wantOFA) slOFA.opticalFlow=VK_TRUE;
-
-  VkDeviceCreateInfo ext = *ci;
-  if(wantOFA){ slOFA.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slOFA; }
-  ext.enabledExtensionCount=(uint32_t)exts.size(); ext.ppEnabledExtensionNames=exts.data();
-  ext.queueCreateInfoCount=(uint32_t)queues.size(); ext.pQueueCreateInfos=queues.data();
-
-  if(qfail){ Log("CreateDeviceWithSL: queue surgery failed limits -> plain proxy create"); return proxy(pd,ci,a,out); }
-  Log("CreateDeviceWithSL: extended (+%u ext) g=%u@%u c=%u@%u ofa=%u@%u ofaFeature=%d",
-      (unsigned)(exts.size()-ci->enabledExtensionCount), g_slots.gfxFamily,g_slots.gfxIndex,
-      g_slots.compFamily,g_slots.compIndex,g_slots.ofaFamily,g_slots.ofaIndex,(int)wantOFA);
-  VkResult r = proxy(pd,&ext,a,out);
-  Log("CreateDeviceWithSL: interposer vkCreateDevice -> %d", (int)r);
-  if(r!=VK_SUCCESS){ Log("CreateDeviceWithSL: extended failed -> plain proxy create"); return proxy(pd,ci,a,out); }
-  return r;
-}
 
 void OnDeviceCreated(){
-  if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit failed, skipping SL device setup"); return; }
-
-  sl::VulkanInfo vi{};
-  vi.device = fgvk::gDevice;
-  vi.instance = fgvk::gInstance;
-  vi.physicalDevice = fgvk::gPhysicalDevice;
-  // GRAPHICS/present queue = the GAME's actual queue (family 0, index 0). The game presents
-  // on this; SL must match it here or the pacer rejects it ('Invalid VK app queue').
-  vi.graphicsQueueIndex = 0;
-  vi.graphicsQueueFamily = fgvk::gGraphicsFamily;
-  // COMPUTE/OFA = SL's own surgery-allocated queues (the extras we added past the game's).
-  vi.computeQueueIndex = g_slots.compIndex; vi.computeQueueFamily = (g_slots.compFamily!=~0u)?g_slots.compFamily:fgvk::gGraphicsFamily;
-  vi.opticalFlowQueueIndex = g_slots.ofaIndex; vi.opticalFlowQueueFamily = (g_slots.ofaFamily!=~0u)?g_slots.ofaFamily:0;
-  sl::Result rVk = p_slSetVulkanInfo(vi);
-  Log("slSetVulkanInfo -> %d (gfx %u@0, comp %u@%u, ofa %u@%u)", (int)rVk,
-      vi.graphicsQueueFamily, vi.computeQueueFamily, vi.computeQueueIndex, vi.opticalFlowQueueFamily, vi.opticalFlowQueueIndex);
-  if (rVk != sl::Result::eOk) { Log("OnDeviceCreated: slSetVulkanInfo failed (%d)", (int)rVk); return; }
-
+  // Full interposition: the interposer created + owns the device and its queues (its own
+  // surgery). NO slSetVulkanInfo, NO device surgery - those double-register an interposer
+  // device and caused every crash/queue-rejection before. We only enable the features.
+  if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit not ready"); return; }
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
   // DLSS-G requires Reflex ON. Set Reflex before enabling DLSS-G.
