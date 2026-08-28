@@ -106,16 +106,22 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
   return r;
 }
 
+// Our PCL markers + slReflexSleep are OFF by default: BG3 drives Reflex natively via
+// NvLowLatencyVk, and double-driving it gives the DLSS-G pacer conflicting frame markers
+// (observed: pacer cadence collapses, acquireNextBuffer times out, present loop stalls).
+// Flip to true only if generation stops without our markers (i.e. native Reflex isn't enough).
+static const bool kEmitOurMarkers = false;
+
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
-  g_wdPresents.fetch_add(1); g_wdPos.store(1);
-  PollDLSSGState();
+  uint32_t n = g_wdPresents.fetch_add(1); g_wdPos.store(1);
+  if((n % 120)==0) PollDLSSGState();   // periodic, not every present (slDLSSGGetState can lock)
   NgxProbeTick();
-  PresentMarkersBegin();
-  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p", (void*)q); }
+  if(kEmitOurMarkers) PresentMarkersBegin();
+  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p markers=%d", (void*)q,(int)kEmitOurMarkers); }
   g_wdPos.store(2);
   VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
-  PresentMarkersEnd();
+  if(kEmitOurMarkers) PresentMarkersEnd();
   g_wdPos.store(0);
   return r;
 }
