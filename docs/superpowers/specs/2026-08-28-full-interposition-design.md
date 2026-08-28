@@ -66,3 +66,37 @@ pacer accepts queue → frames (watermark + ~4× fps).
 Phase 0: his sl.log captured, the queue-registration and device-creation questions
 answered with line citations. Phase 1/2: fgvk run shows no `Invalid VK app queue`,
 pacer paces, DLSS-G watermark visible, displayed fps ≈ 4× real.
+
+## Phase 0 findings (mined from PureDark's live run, 2026-08-27)
+
+Source: his `bin/mods/BG3Upscaler.log` (his mod's own boot log) + our compat SE
+present profiler observing his run (`SE-PresentProfile.log`). His verbose sl.log was
+unobtainable (VMProtect strips SL's external json config) — but unnecessary.
+
+**Confirmed architecture — single GIPA hook:**
+```
+[info] hk_vkGetInstanceProcAddr sl::RenderAPI::eVulkan   <- THE single entry point
+[info] hk_vkCreateInstance (x2)
+[info] hk_vkCreateDevice
+[info] DLSS/Reflex/PCL/DLSS-G supported
+[info] hk_vkCreateSwapchainKHR created original SwapChain 2560x1440 fmt44
+[info] hk_NVSDK_NGX_VULKAN_CreateFeature FeatureID 1
+```
+He hooks `vkGetInstanceProcAddr` and returns the interposer's functions. The game then
+resolves vkCreateInstance/vkCreateDevice/vkCreateSwapchainKHR (and their queues) FROM
+the interposer, so SL owns the entire dispatch from the first call. He also hooks NGX
+`CreateFeature` (id 1), not only EvaluateFeature.
+
+**Confirmed present model — single interposer-owned queue:**
+Profiler over his run: all presents on ONE queue handle (`q0=...3B3CD0:600`, q1/q2
+empty). Because that queue is created THROUGH the interposer (his GIPA hook →
+interposer vkGetDeviceQueue), SL's getHostQueueInfo recognizes it. This is the exact
+inverse of our `Invalid VK app queue` failure and confirms the queue problem is solved
+by GIPA ownership, not by any queue-specific fix.
+
+**Locks Phase 1's central decision:** the rework is a `vkGetInstanceProcAddr` hook that
+hands the game the interposer's function pointers. No in-place export detours, no
+driver-pointer detours, no slSetVulkanInfo, no device surgery (the interposer does its
+own, as his log's plugin-requested extensions show). fgvk keeps: slInit(features),
+slDLSSGSetOptions+Reflex after device-create, the NGX snoop + all four tags + recipe,
+PCL markers, watchdog. Add: hook NGX CreateFeature too (mirror him).
