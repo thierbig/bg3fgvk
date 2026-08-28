@@ -49,6 +49,13 @@ static PFN_vkCreateSwapchainKHR t_CreateSwapchainKHR{};
 // g_reentry>0 originate INSIDE the interposer and must go straight to the real loader.
 static thread_local int g_reentry = 0;
 struct Reentry { Reentry(){ ++g_reentry; } ~Reentry(){ --g_reentry; } };
+// Global guard for slInit: SL's plugins spawn WORKER THREADS during init that call the hooked
+// GIPA (where thread_local g_reentry is 0). The game makes no Vulkan calls during slInit, so
+// forcing ALL threads to the real loader for that window is safe and breaks the cross-thread
+// recursion that hangs slInit.
+static std::atomic<int> g_globalReal{0};
+struct GlobalReal { GlobalReal(){ ++g_globalReal; } ~GlobalReal(){ --g_globalReal; } };
+static inline bool ForceReal(){ return g_reentry || g_globalReal.load(std::memory_order_acquire); }
 
 // ---- thin wrappers: call the INTERPOSER target, capture/act, return ----------------------
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateInstance(
@@ -101,7 +108,7 @@ static PFN_vkGetDeviceProcAddr o_GDPA_real{};   // real loader GDPA, for re-entr
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev, const char* name){
   if (!name) return nullptr;
   // Re-entrant (interposer forwarding to the driver): go to the real loader, not the interposer.
-  if (g_reentry) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
   PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr; }
   if (!ip) return nullptr;
   if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }
@@ -118,12 +125,12 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetInstanceProcAddr(VkInstance inst, const char* name){
   if(!name) return nullptr;
   // Re-entrant (interposer forwarding to the driver): straight to the real loader.
-  if(g_reentry) return o_GIPA ? o_GIPA(inst, name) : nullptr;
+  if(ForceReal()) return o_GIPA ? o_GIPA(inst, name) : nullptr;
 
   if(!strcmp(name,"vkCreateInstance")){
     static bool inited=false;
     if(!inited){ inited=true;
-      Reentry _;   // interposer load + slInit forward to the real loader, not back into us
+      Reentry _; GlobalReal _g;   // ALL threads -> real loader during interposer load + slInit
       ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr");  // loads interposer, set FIRST
       ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr");
       EnsureStreamlineInit();   // slInit
