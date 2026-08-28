@@ -195,95 +195,16 @@ static void FetchSLRequirements(){
 
 VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
                             const VkAllocationCallbacks* a, VkDevice* out){
-  // FULL INTERPOSER OWNERSHIP (PureDark parity): the interposer's vkCreateDevice already
-  // proved it works here (returned 0 earlier tonight); what crashed then was the
-  // slSetVulkanInfo we called AFTER it - a manual-integration call that double-registers an
-  // interposer-owned device. Interposer-created device = SL tracks it and its queues, so the
-  // pacer accepts the present queue ('Invalid VK app queue' was the generation-start freeze).
+  // PLAIN PASSTHROUGH to the interposer (PureDark parity). Its own vkCreateDevice does the
+  // surgery itself - the SL log shows it adding plugin-requested extensions and finding queue
+  // families - and our manual injection triggered VUID-02830 (the game already chains those
+  // features individually), poisoning plugin init. Hand it the game's untouched create-info.
   PFN_vkCreateDevice proxy = SlProxyCreateDevice();
   if(!proxy){ Log("CreateDeviceWithSL: no interposer vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
-  FetchSLRequirements();
-  if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
-
-  auto pQFP = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)GetProcAddress(
-      GetModuleHandleA("vulkan-1.dll"), "vkGetPhysicalDeviceQueueFamilyProperties");
-  uint32_t famCount=0; if(pQFP) pQFP(pd,&famCount,nullptr);
-  std::vector<VkQueueFamilyProperties> fams(famCount); if(pQFP&&famCount) pQFP(pd,&famCount,fams.data());
-  auto findFamily=[&](VkQueueFlags req, VkQueueFlags absent)->uint32_t{
-    uint32_t fb=~0u;
-    for(uint32_t i=0;i<famCount;i++){ if((fams[i].queueFlags&req)!=req) continue;
-      if((fams[i].queueFlags&absent)==0) return i; if(fb==~0u) fb=i; }
-    return fb; };
-
-  // extensions (dedup-add)
-  std::vector<const char*> exts(ci->ppEnabledExtensionNames, ci->ppEnabledExtensionNames+ci->enabledExtensionCount);
-  for(auto& w: g_reqs.devExt){ bool have=false; for(auto e: exts) if(w==e){have=true;break;} if(!have) exts.push_back(w.c_str()); }
-
-  // queues (copy game's, append SL's compute + OFA)
-  std::vector<VkDeviceQueueCreateInfo> queues(ci->pQueueCreateInfos, ci->pQueueCreateInfos+ci->queueCreateInfoCount);
-  std::vector<std::vector<float>> prio;
-  bool qfail=false;
-  auto addQ=[&](uint32_t family, uint32_t extra, uint32_t& outIdx){
-    if(extra==0||family==~0u){ if(extra>0) qfail=true; return; }
-    for(auto& q: queues){ if(q.queueFamilyIndex!=family) continue;
-      if(q.queueCount+extra>fams[family].queueCount){ qfail=true; return; }
-      outIdx=q.queueCount; prio.emplace_back(q.queueCount+extra,1.0f);
-      if(q.pQueuePriorities) std::copy(q.pQueuePriorities,q.pQueuePriorities+q.queueCount,prio.back().begin());
-      q.queueCount+=extra; q.pQueuePriorities=prio.back().data(); return; }
-    if(extra>fams[family].queueCount){ qfail=true; return; }
-    outIdx=0; prio.emplace_back(extra,1.0f);
-    queues.push_back(VkDeviceQueueCreateInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,nullptr,0,family,extra,prio.back().data()}); };
-
-  g_slots = SLSlots{};
-  g_slots.gfxFamily = findFamily(VK_QUEUE_GRAPHICS_BIT,0);
-  if(g_reqs.gfxQ>0) addQ(g_slots.gfxFamily, g_reqs.gfxQ, g_slots.gfxIndex);
-  if(g_reqs.compQ>0){ g_slots.compFamily=findFamily(VK_QUEUE_COMPUTE_BIT,VK_QUEUE_GRAPHICS_BIT); addQ(g_slots.compFamily,g_reqs.compQ,g_slots.compIndex); }
-  if(g_reqs.ofaQ>0){ g_slots.ofaFamily=findFamily(VK_QUEUE_OPTICAL_FLOW_BIT_NV,0); addQ(g_slots.ofaFamily,g_reqs.ofaQ,g_slots.ofaIndex); }
-
-  // features 1.2/1.3: OR SL's required bits into the game's EXISTING chained struct if
-  // present (BG3 chains its own) - prepending a second Vulkan12Features with the same sType
-  // makes the driver reject the device (the crash inside the interposer's vkCreateDevice).
-  std::vector<const char*> n12,n13;
-  for(auto&x:g_reqs.f12) n12.push_back(x.c_str());
-  for(auto&x:g_reqs.f13) n13.push_back(x.c_str());
-  auto slF12 = sl::getVkPhysicalDeviceVulkan12Features((uint32_t)n12.size(), n12.empty()?nullptr:n12.data());
-  auto slF13 = sl::getVkPhysicalDeviceVulkan13Features((uint32_t)n13.size(), n13.empty()?nullptr:n13.data());
-  VkPhysicalDeviceOpticalFlowFeaturesNV slOFA{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPTICAL_FLOW_FEATURES_NV };
-  bool wantOFA = (g_reqs.ofaQ>0) && (g_slots.ofaFamily!=~0u); if(wantOFA) slOFA.opticalFlow=VK_TRUE;
-
-  // Scan the game's pNext for existing 1.2/1.3 feature structs.
-  VkPhysicalDeviceVulkan12Features* gameF12=nullptr;
-  VkPhysicalDeviceVulkan13Features* gameF13=nullptr;
-  for(auto node=(VkBaseOutStructure*)const_cast<void*>(ci->pNext); node; node=node->pNext){
-    if(node->sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) gameF12=(VkPhysicalDeviceVulkan12Features*)node;
-    if(node->sType==VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) gameF13=(VkPhysicalDeviceVulkan13Features*)node;
-  }
-  // Save originals so we can restore the game's structs after create (we mutate in place).
-  VkPhysicalDeviceVulkan12Features saved12{}; VkPhysicalDeviceVulkan13Features saved13{};
-  if(gameF12) saved12=*gameF12;
-  if(gameF13) saved13=*gameF13;
-  // OR the VkBool32 payload (everything after the sType+pNext header).
-  auto orBits=[](void* dst, const void* src, size_t structSize){
-    const size_t hdr=sizeof(VkStructureType)+sizeof(void*); // sType + pNext
-    auto* d=(VkBool32*)((uint8_t*)dst+hdr); auto* s=(const VkBool32*)((const uint8_t*)src+hdr);
-    size_t n=(structSize-hdr)/sizeof(VkBool32); for(size_t i=0;i<n;i++) d[i]|=s[i]; };
-
-  VkDeviceCreateInfo ext = *ci;
-  if(!g_reqs.f12.empty()){ if(gameF12) orBits(gameF12,&slF12,sizeof(slF12)); else { slF12.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF12; } }
-  if(!g_reqs.f13.empty()){ if(gameF13) orBits(gameF13,&slF13,sizeof(slF13)); else { slF13.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slF13; } }
-  if(wantOFA){ slOFA.pNext=const_cast<void*>(ext.pNext); ext.pNext=&slOFA; }
-  ext.enabledExtensionCount=(uint32_t)exts.size(); ext.ppEnabledExtensionNames=exts.data();
-  ext.queueCreateInfoCount=(uint32_t)queues.size(); ext.pQueueCreateInfos=queues.data();
-
-  auto restore=[&](){ if(gameF12)*gameF12=saved12; if(gameF13)*gameF13=saved13; };
-  if(qfail){ Log("CreateDeviceWithSL: queue surgery failed limits -> plain proxy create"); restore(); return proxy(pd,ci,a,out); }
-  Log("CreateDeviceWithSL: extended (+%u ext) g=%u@%u c=%u@%u ofa=%u@%u f12in=%p f13in=%p",
-      (unsigned)(exts.size()-ci->enabledExtensionCount), g_slots.gfxFamily,g_slots.gfxIndex,
-      g_slots.compFamily,g_slots.compIndex,g_slots.ofaFamily,g_slots.ofaIndex,(void*)gameF12,(void*)gameF13);
-  VkResult r = proxy(pd,&ext,a,out);
+  FetchSLRequirements();   // logging only - the interposer handles its own requirements
+  Log("CreateDeviceWithSL: passthrough to interposer (no manual surgery)");
+  VkResult r = proxy(pd, ci, a, out);
   Log("CreateDeviceWithSL: interposer vkCreateDevice -> %d", (int)r);
-  restore();
-  if(r!=VK_SUCCESS){ Log("CreateDeviceWithSL: extended failed -> plain proxy create"); return proxy(pd,ci,a,out); }
   return r;
 }
 
