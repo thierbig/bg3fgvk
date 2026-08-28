@@ -195,11 +195,13 @@ static void FetchSLRequirements(){
 
 VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
                             const VkAllocationCallbacks* a, VkDevice* out){
-  // NATIVE vkCreateDevice, NOT the interposer's: BG3SE proved interposer-owned device
-  // creation crashes in its in-call plugin init. The working hybrid is interposer INSTANCES
-  // + manual surgery + NATIVE device + slSetVulkanInfo to register it with SL.
-  PFN_vkCreateDevice proxy = fgvk::NativeCreateDevice();
-  if(!proxy){ Log("CreateDeviceWithSL: no native vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
+  // FULL INTERPOSER OWNERSHIP (PureDark parity): the interposer's vkCreateDevice already
+  // proved it works here (returned 0 earlier tonight); what crashed then was the
+  // slSetVulkanInfo we called AFTER it - a manual-integration call that double-registers an
+  // interposer-owned device. Interposer-created device = SL tracks it and its queues, so the
+  // pacer accepts the present queue ('Invalid VK app queue' was the generation-start freeze).
+  PFN_vkCreateDevice proxy = SlProxyCreateDevice();
+  if(!proxy){ Log("CreateDeviceWithSL: no interposer vkCreateDevice"); return VK_ERROR_INITIALIZATION_FAILED; }
   FetchSLRequirements();
   if(!g_reqs.valid){ Log("CreateDeviceWithSL: no SL reqs -> plain proxy create"); return proxy(pd,ci,a,out); }
 
@@ -288,17 +290,10 @@ VkResult CreateDeviceWithSL(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
 void OnDeviceCreated(){
   if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit failed, skipping SL device setup"); return; }
 
-  sl::VulkanInfo vi{};
-  vi.device = fgvk::gDevice;
-  vi.instance = fgvk::gInstance;
-  vi.physicalDevice = fgvk::gPhysicalDevice;
-  vi.graphicsQueueIndex = (g_slots.gfxFamily!=~0u) ? g_slots.gfxIndex : 0;
-  vi.graphicsQueueFamily = (g_slots.gfxFamily!=~0u) ? g_slots.gfxFamily : fgvk::gGraphicsFamily;
-  vi.computeQueueIndex = g_slots.compIndex; vi.computeQueueFamily = (g_slots.compFamily!=~0u)?g_slots.compFamily:fgvk::gGraphicsFamily;
-  vi.opticalFlowQueueIndex = g_slots.ofaIndex; vi.opticalFlowQueueFamily = (g_slots.ofaFamily!=~0u)?g_slots.ofaFamily:0;
-  sl::Result rVk = p_slSetVulkanInfo(vi);
-  Log("slSetVulkanInfo -> %d", (int)rVk);
-  if (rVk != sl::Result::eOk) { Log("OnDeviceCreated: slSetVulkanInfo failed (%d) - aborting SL setup", (int)rVk); return; }
+  // Interposer owns the device: it registered device+queues during its vkCreateDevice.
+  // slSetVulkanInfo is for the manual path only and crashed when combined with interposer
+  // ownership - skip it entirely.
+  Log("interposer owns device - slSetVulkanInfo skipped");
 
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
