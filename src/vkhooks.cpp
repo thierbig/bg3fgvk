@@ -43,10 +43,17 @@ static PFN_vkCreateDevice       t_CreateDevice{};
 static PFN_vkQueuePresentKHR    t_QueuePresentKHR{};
 static PFN_vkCreateSwapchainKHR t_CreateSwapchainKHR{};
 
+// Re-entry guard: we Detoured vulkan-1's GIPA in place, so when the interposer forwards to
+// the real loader (to reach the driver) it re-enters our hook. Without this, our hook routes
+// that back into the interposer -> infinite recursion (the slInit hang). Calls made while
+// g_reentry>0 originate INSIDE the interposer and must go straight to the real loader.
+static thread_local int g_reentry = 0;
+struct Reentry { Reentry(){ ++g_reentry; } ~Reentry(){ --g_reentry; } };
+
 // ---- thin wrappers: call the INTERPOSER target, capture/act, return ----------------------
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateInstance(
     const VkInstanceCreateInfo* ci, const VkAllocationCallbacks* a, VkInstance* out){
-  VkResult r = t_CreateInstance(ci, a, out);
+  VkResult r; { Reentry _; r = t_CreateInstance(ci, a, out); }
   if (r == VK_SUCCESS){ gInstance = *out; Log("w_CreateInstance ok instance=%p", (void*)gInstance); }
   return r;
 }
@@ -55,12 +62,12 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
     const VkAllocationCallbacks* a, VkDevice* out){
   // Interposer owns the device (its own surgery/queues). We only capture + kick off SL setup.
-  VkResult r = t_CreateDevice(pd, ci, a, out);
+  VkResult r; { Reentry _; r = t_CreateDevice(pd, ci, a, out); }
   if (r == VK_SUCCESS){
     gPhysicalDevice = pd; gDevice = *out;
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){ gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
     Log("w_CreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
-    OnDeviceCreated();   // slboot: Reflex + slDLSSGSetOptions + frame fns (NO surgery/slSetVulkanInfo)
+    { Reentry _; OnDeviceCreated(); }   // slboot: Reflex + slDLSSGSetOptions (SL calls -> guard)
   }
   return r;
 }
@@ -68,7 +75,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
     VkDevice dev, const VkSwapchainCreateInfoKHR* ci,
     const VkAllocationCallbacks* a, VkSwapchainKHR* out){
-  VkResult r = t_CreateSwapchainKHR(dev, ci, a, out);
+  VkResult r; { Reentry _; r = t_CreateSwapchainKHR(dev, ci, a, out); }
   static bool logged=false; if(!logged){ logged=true;
     Log("w_CreateSwapchainKHR %ux%u fmt=%d -> %d sc=%p", ci->imageExtent.width, ci->imageExtent.height,
         (int)ci->imageFormat, (int)r, out?(void*)*out:nullptr); }
@@ -83,16 +90,20 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPrese
   PresentMarkersBegin();
   static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p", (void*)q); }
   g_wdPos.store(2);
-  VkResult r = t_QueuePresentKHR(q, pi);   // interposer present = DLSS-G generation
+  VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
   PresentMarkersEnd();
   g_wdPos.store(0);
   return r;
 }
 
 // ---- wrapped device-proc-addr: hand the game interposer device fns, wrap present/swapchain --
+static PFN_vkGetDeviceProcAddr o_GDPA_real{};   // real loader GDPA, for re-entrant forwards
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev, const char* name){
-  PFN_vkVoidFunction ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr;
-  if (!ip || !name) return ip;
+  if (!name) return nullptr;
+  // Re-entrant (interposer forwarding to the driver): go to the real loader, not the interposer.
+  if (g_reentry) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr; }
+  if (!ip) return nullptr;
   if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
   return ip;   // everything else: the interposer's own device function
@@ -106,23 +117,26 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
 // GIPA/GDPA FIRST so slInit's own re-entrant GIPA calls see the interposer, not the raw loader.
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetInstanceProcAddr(VkInstance inst, const char* name){
   if(!name) return nullptr;
+  // Re-entrant (interposer forwarding to the driver): straight to the real loader.
+  if(g_reentry) return o_GIPA ? o_GIPA(inst, name) : nullptr;
 
   if(!strcmp(name,"vkCreateInstance")){
     static bool inited=false;
     if(!inited){ inited=true;
+      Reentry _;   // interposer load + slInit forward to the real loader, not back into us
       ip_GIPA = (PFN_vkGetInstanceProcAddr)SlProxyFn("vkGetInstanceProcAddr");  // loads interposer, set FIRST
       ip_GDPA = (PFN_vkGetDeviceProcAddr)SlProxyFn("vkGetDeviceProcAddr");
-      EnsureStreamlineInit();   // slInit now (normal execution, no loader lock)
+      EnsureStreamlineInit();   // slInit
       Log("SL init on vkCreateInstance resolve: ip_GIPA=%p ip_GDPA=%p", (void*)ip_GIPA,(void*)ip_GDPA);
     }
-    PFN_vkVoidFunction ip = ip_GIPA ? ip_GIPA(inst,name) : (o_GIPA?o_GIPA(inst,name):nullptr);
+    PFN_vkVoidFunction ip; { Reentry _; ip = ip_GIPA ? ip_GIPA(inst,name) : (o_GIPA?o_GIPA(inst,name):nullptr); }
     if(ip){ t_CreateInstance=(PFN_vkCreateInstance)ip; return (PFN_vkVoidFunction)w_CreateInstance; }
     return nullptr;
   }
 
   // Everything else: interposer if ready, else the real loader (enumeration fns before
   // vkCreateInstance don't need the interposer).
-  PFN_vkVoidFunction ip = ip_GIPA ? ip_GIPA(inst, name) : nullptr;
+  PFN_vkVoidFunction ip; { Reentry _; ip = ip_GIPA ? ip_GIPA(inst, name) : nullptr; }
   if(!ip) ip = o_GIPA ? o_GIPA(inst, name) : nullptr;
   if(!ip) return nullptr;
   if(!strcmp(name,"vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)h_GetInstanceProcAddr;
@@ -143,6 +157,7 @@ void InstallVkHooks(){
   if(!vk) vk = LoadLibraryA("vulkan-1.dll");
   if(!vk){ Log("InstallVkHooks: vulkan-1.dll not found"); return; }
   o_GIPA = (PFN_vkGetInstanceProcAddr)GetProcAddress(vk, "vkGetInstanceProcAddr");
+  o_GDPA_real = (PFN_vkGetDeviceProcAddr)GetProcAddress(vk, "vkGetDeviceProcAddr");
   if(!o_GIPA){ Log("InstallVkHooks: vkGetInstanceProcAddr export missing"); return; }
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourAttach(&(PVOID&)o_GIPA,(PVOID)h_GetInstanceProcAddr);
