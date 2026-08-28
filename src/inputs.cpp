@@ -45,6 +45,9 @@ namespace fgvk {
 
 // ---- state ----------------------------------------------------------------------------
 static PFN_NgxEvaluateFeature o_NgxEvaluate{};
+typedef NVSDK_NGX_Result (__cdecl *PFN_NgxCreateFeature)(VkCommandBuffer, unsigned int /*featureId*/,
+    NVSDK_NGX_Parameter*, NVSDK_NGX_Handle**);
+static PFN_NgxCreateFeature o_NgxCreateFeature{};
 static PFN_NgxGetVoidPointer p_GetVoidPointer{};
 static PFN_NgxGetF p_GetF{};
 static PFN_NgxGetUI p_GetUI{};
@@ -333,6 +336,13 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
   return r;
 }
 
+// Diagnostic parity with PureDark's hk_NVSDK_NGX_VULKAN_CreateFeature: log the SR feature id.
+static NVSDK_NGX_Result __cdecl h_NgxCreateFeature(VkCommandBuffer cmd, unsigned int featureId,
+    NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle** outH){
+  static bool logged=false; if(!logged){ logged=true; Log("NGX CreateFeature featureId=%u", featureId); }
+  return o_NgxCreateFeature(cmd, featureId, p, outH);
+}
+
 void NgxProbeTick(){
   if(g_hooked) return;
   if(g_probeDelay-->0) return;
@@ -343,6 +353,7 @@ void NgxProbeTick(){
     found=m; foundName=name; return true; });
   if(!found) return;
   o_NgxEvaluate=(PFN_NgxEvaluateFeature)GetProcAddress(found,"NVSDK_NGX_VULKAN_EvaluateFeature");
+  o_NgxCreateFeature=(PFN_NgxCreateFeature)GetProcAddress(found,"NVSDK_NGX_VULKAN_CreateFeature");
   // param getters can live in a different module - probe independently
   forEachNgxModule([&](HMODULE m, const wchar_t*){
     auto gp=(PFN_NgxGetVoidPointer)GetProcAddress(m,"NVSDK_NGX_Parameter_GetVoidPointer");
@@ -353,10 +364,12 @@ void NgxProbeTick(){
     return true; });
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourAttach(&(PVOID&)o_NgxEvaluate,(PVOID)h_NgxEvaluate);
+  if(o_NgxCreateFeature) DetourAttach(&(PVOID&)o_NgxCreateFeature,(PVOID)h_NgxCreateFeature);
   LONG rc=DetourTransactionCommit();
   g_hooked=(rc==NO_ERROR);
-  Log("NGX evaluate hook: module=%S commit=%ld getters=%p/%p/%p",
-      foundName?foundName:L"?",rc,(void*)p_GetVoidPointer,(void*)p_GetF,(void*)p_GetUI);
+  Log("NGX hooks: module=%S commit=%ld eval=%p create=%p getters=%p/%p/%p",
+      foundName?foundName:L"?",rc,(void*)o_NgxEvaluate,(void*)o_NgxCreateFeature,
+      (void*)p_GetVoidPointer,(void*)p_GetF,(void*)p_GetUI);
 }
 
 // ---- PCL markers + reflex sleep per present -------------------------------------------
