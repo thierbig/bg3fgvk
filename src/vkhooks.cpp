@@ -99,10 +99,23 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
     VkDevice dev, const VkSwapchainCreateInfoKHR* ci,
     const VkAllocationCallbacks* a, VkSwapchainKHR* out){
-  VkResult r; { Reentry _; r = t_CreateSwapchainKHR(dev, ci, a, out); }
+  // Bump image count for DLSS-G headroom: the pacer holds N generated frames in flight, so a
+  // 2-3 image swapchain starves the game's acquire -> present/acquire deadlock (the freeze
+  // after ~1000 frames). Give it minImageCount + numFramesToGenerate + spare.
+  VkSwapchainCreateInfoKHR mod = *ci;
+  const uint32_t kWant = ci->minImageCount + 3 /*x4 gen*/ + 1;
+  if (mod.minImageCount < kWant) mod.minImageCount = kWant;
   static bool logged=false; if(!logged){ logged=true;
-    Log("w_CreateSwapchainKHR %ux%u fmt=%d -> %d sc=%p", ci->imageExtent.width, ci->imageExtent.height,
-        (int)ci->imageFormat, (int)r, out?(void*)*out:nullptr); }
+    Log("w_CreateSwapchainKHR %ux%u fmt=%d mode=%d gameMinImg=%u -> bumped=%u",
+        ci->imageExtent.width, ci->imageExtent.height, (int)ci->imageFormat,
+        (int)ci->presentMode, ci->minImageCount, mod.minImageCount); }
+  VkResult r; { Reentry _; r = t_CreateSwapchainKHR(dev, &mod, a, out); }
+  if(r!=VK_SUCCESS){ // fall back to the game's exact request if the bump was rejected
+    Reentry _; r = t_CreateSwapchainKHR(dev, ci, a, out);
+    Log("w_CreateSwapchainKHR bumped failed, vanilla -> %d", (int)r);
+  }
+  if(!logged || r==VK_SUCCESS){ static bool l2=false; if(!l2){ l2=true;
+    Log("w_CreateSwapchainKHR -> %d sc=%p", (int)r, out?(void*)*out:nullptr); } }
   return r;
 }
 
