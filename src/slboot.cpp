@@ -156,7 +156,7 @@ void OnDeviceCreated(){
 
   sl::DLSSGOptions o{};
   o.mode = sl::DLSSGMode::eOn;
-  o.numFramesToGenerate = 3;   // PureDark config: mDLSSGFrames=4 -> 3 generated (x4)
+  o.numFramesToGenerate = 1;   // x2 (lightest) - test pacer stability vs GPU headroom   // PureDark config: mDLSSGFrames=4 -> 3 generated (x4)
   sl::ViewportHandle vp{0};
   sl::Result rDlssg = p_slDLSSGSetOptions(vp, o);
   Log("slDLSSGSetOptions -> %d", (int)rDlssg);
@@ -167,7 +167,7 @@ void PollDLSSGState(){
   sl::DLSSGState st{};
   sl::DLSSGOptions o{};
   o.mode = sl::DLSSGMode::eOn;
-  o.numFramesToGenerate = 3;   // PureDark config: mDLSSGFrames=4 -> 3 generated (x4)
+  o.numFramesToGenerate = 1;   // x2 (lightest) - test pacer stability vs GPU headroom   // PureDark config: mDLSSGFrames=4 -> 3 generated (x4)
   sl::ViewportHandle vp{0};
   if(p_slDLSSGGetState(vp, st, &o) == sl::Result::eOk){
     static uint32_t last = 0xFFFFFFFF;
