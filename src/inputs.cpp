@@ -65,6 +65,8 @@ struct FrameInputs {
   unsigned int reset=0;
 };
 static FrameInputs g_in;
+static inline double NowMs(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return 1000.0*(double)c.QuadPart/(double)f.QuadPart; }
+static double g_maxTagMs=0, g_maxConstMs=0, g_maxHudMs=0, g_lastEvalMs=0, g_maxGapMs=0; static uint32_t g_evalN=0;
 static sl::FrameToken* g_lastToken=nullptr;
 
 // UIColorAndAlpha transparent image (session lifetime)
@@ -225,7 +227,9 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
     sl::ResourceTag(&depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &depthExtent),
     sl::ResourceTag(&mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &mvecExtent),
   };
+  double _t0=NowMs();
   auto tagRes = fns.setTagForFrame(*token, vp, tags, 2, reinterpret_cast<sl::CommandBuffer*>(cmd));
+  double _tag=NowMs()-_t0; if(_tag>g_maxTagMs) g_maxTagMs=_tag;
   if(tagRes!=sl::Result::eOk && !g_logTagFail){ g_logTagFail=true; Log("slSetTagForFrame(depth/mvec) failed: %d",(int)tagRes); }
 
   float aspect = g_in.mvecH ? (float)g_in.mvecW/(float)g_in.mvecH : 1.7778f;
@@ -248,11 +252,16 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   c.motionVectors3D = sl::Boolean::eFalse;
   c.motionVectorsJittered = sl::Boolean::eFalse;
   c.reset = g_in.reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+  double _c0=NowMs();
   auto constRes = fns.setConstants(c, *token, vp);
+  double _cms=NowMs()-_c0; if(_cms>g_maxConstMs) g_maxConstMs=_cms;
   if(constRes!=sl::Result::eOk && !g_logConstFail){ g_logConstFail=true; Log("slSetConstants failed: %d",(int)constRes); }
   if(tagRes==sl::Result::eOk && constRes==sl::Result::eOk && !g_logSubmitOk){
     g_logSubmitOk=true; Log("FG inputs submitted ok (depth %ux%u, mvec %ux%u, jitter %.4f/%.4f mvScale %.1f/%.1f)",
       g_in.depthW,g_in.depthH,g_in.mvecW,g_in.mvecH,g_in.jitterX,g_in.jitterY,g_in.mvScaleX,g_in.mvScaleY); }
+  double _now=NowMs(); double _gap=_now-g_lastEvalMs; if(g_lastEvalMs>0 && _gap>g_maxGapMs) g_maxGapMs=_gap; g_lastEvalMs=_now;
+  if((++g_evalN % 120)==0){ Log("TIMING: maxTag=%.1fms maxConst=%.1fms maxHud=%.1fms maxFrameGap=%.1fms (over 120 evals)",
+      g_maxTagMs,g_maxConstMs,g_maxHudMs,g_maxGapMs); g_maxTagMs=g_maxConstMs=g_maxHudMs=g_maxGapMs=0; }
   return tagRes==sl::Result::eOk && constRes==sl::Result::eOk;
 }
 
@@ -275,7 +284,9 @@ static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view
     sl::ResourceTag(&uiRes, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &extent),
   };
   sl::ViewportHandle vp{0};
+  double _h0=NowMs();
   auto res = fns.setTagForFrame(*g_lastToken, vp, tags, haveUI?2u:1u, reinterpret_cast<sl::CommandBuffer*>(cmd));
+  double _hms=NowMs()-_h0; if(_hms>g_maxHudMs) g_maxHudMs=_hms;
   if(res==sl::Result::eOk && !g_logHudTag){ g_logHudTag=true; Log("HUDLessColor+UI tagged %ux%u (color source live)",w,h); }
   else if(res!=sl::Result::eOk && !g_logHudTag){ g_logHudTag=true; Log("slSetTagForFrame(HUDLess) failed: %d",(int)res); }
 }
