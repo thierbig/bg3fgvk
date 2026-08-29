@@ -373,28 +373,34 @@ void NgxProbeTick(){
 }
 
 // ---- PCL markers + reflex sleep per present -------------------------------------------
+static sl::FrameToken* g_presentToken = nullptr;
 void PresentMarkersBegin(){
   // ALL SIX markers with ONE token, before the present - the SE's proven shape. Splitting
   // PresentEnd to after the present pairs it with token N+1 (sl.common increments the frame
   // counter DURING present), leaving every PresentStart dangling; the DLSS-G pacer keys on
   // the pair and waits forever the moment generation starts (the 95%-load freeze).
+  // Correct bracketing: sim/render/present-START before the present, present-END AFTER (in
+  // PresentMarkersEnd), with the SAME token. Firing all six at once gave the pacer a zero-
+  // duration present, so its timing model can't survive a hitch (the WaitSemaphores deadlock).
+  // NO slReflexSleep - BG3 drives Reflex natively (NvLowLatencyVk); our sleep double-paced it.
+  // Markers still advance sl.common's counter the +1-shifted constants key to.
   auto& fns = GetSlFns();
+  g_presentToken = nullptr;
   if(!fns.getNewFrameToken || !fns.pclSetMarker) return;
   sl::FrameToken* token=nullptr;
   if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return;
-  // NO slReflexSleep: BG3 drives Reflex natively (NvLowLatencyVk); our sleep double-paces the
-  // frame and destabilizes the DLSS-G pacer (acquire timeouts -> present stall). We keep the
-  // PCL markers - they advance sl.common's frame counter that the +1-shifted constants key to
-  // (without them: 'missing common constants -> FG disabled'), but let native Reflex do the sleep.
+  g_presentToken = token;
   fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*token);
   fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*token);
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*token);
   fns.pclSetMarker(sl::PCLMarker::ePresentStart,*token);
-  fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*token);
 }
 void PresentMarkersEnd(){
-  // intentionally empty - see PresentMarkersBegin
+  auto& fns = GetSlFns();
+  if(!fns.pclSetMarker || !g_presentToken) return;
+  fns.pclSetMarker(sl::PCLMarker::ePresentEnd, *g_presentToken);   // AFTER the real present
+  g_presentToken = nullptr;
 }
 
 }

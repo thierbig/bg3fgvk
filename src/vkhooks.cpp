@@ -26,6 +26,7 @@ static void StartWatchdog(){
     uint32_t lastP=0;
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
+      PollDLSSGState();   // off the present thread (slDLSSGGetState can take a pacer lock)
       if(p!=lastP && pos==0){ lastP=p; continue; }
       Log("wd: presents=%u evals=%u pos=%d%s", p,e,pos,(p==lastP)?" STALLED":"");
       lastP=p; }
@@ -127,9 +128,8 @@ static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; s
 
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
-  uint32_t n = g_wdPresents.fetch_add(1); g_wdPos.store(1);
-  if((n % 120)==0) PollDLSSGState();   // periodic, not every present (slDLSSGGetState can lock)
-  NgxProbeTick();
+  g_wdPresents.fetch_add(1); g_wdPos.store(1);
+  NgxProbeTick();   // cheap after hooked (one bool); PollDLSSGState moved to the watchdog thread
   if(kEmitOurMarkers) PresentMarkersBegin();
   static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p markers=%d", (void*)q,(int)kEmitOurMarkers); }
   g_wdPos.store(2);
