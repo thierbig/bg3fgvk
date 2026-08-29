@@ -189,6 +189,18 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
 
   sl::FrameToken* token=nullptr;
   if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return false;
+  // PCL markers HERE (NGX-eval thread), NOT on the present thread: emitting them on the
+  // present thread takes sl.common/sl.pcl locks that the DLSS-G pacer's sync-present needs,
+  // causing 'Couldn't lock the mutex on sync present' -> pacer WaitSemaphores deadlock.
+  // Emit with the CURRENT (unshifted) token, roughly bracketing the frame we're evaluating.
+  if(fns.pclSetMarker){
+    fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*token);
+    fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*token);
+    fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
+    fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*token);
+    fns.pclSetMarker(sl::PCLMarker::ePresentStart,*token);
+    fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*token);
+  }
   // +1 shift: sl.common's before-present hook pre-increments the frame counter before
   // sl.dlss_g's lookups; submissions under the unshifted index are invisible to the
   // consuming present ("missing common constants" every frame, observed live).

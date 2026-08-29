@@ -26,6 +26,7 @@ static void StartWatchdog(){
     uint32_t lastP=0;
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
+      NgxProbeTick();     // install the DLSS-SR snoop (present no longer wrapped)
       PollDLSSGState();   // off the present thread (slDLSSGGetState can take a pacer lock)
       if(p!=lastP && pos==0){ lastP=p; continue; }
       Log("wd: presents=%u evals=%u pos=%d%s", p,e,pos,(p==lastP)?" STALLED":"");
@@ -93,6 +94,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){ gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
     Log("w_CreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
     { Reentry _; OnDeviceCreated(); }   // slboot: Reflex + slDLSSGSetOptions (SL calls -> guard)
+    StartWatchdog();   // drives NgxProbeTick + PollDLSSGState (present is no longer wrapped)
   }
   return r;
 }
@@ -147,7 +149,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
   if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
   PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr; }
   if (!ip) return nullptr;
-  if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }
+  if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return ip; }   // interposer present DIRECT - no fgvk present-thread work
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
   return ip;   // everything else: the interposer's own device function
 }
