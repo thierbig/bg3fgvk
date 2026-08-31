@@ -27,7 +27,10 @@ static void StartWatchdog(){
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
       NgxProbeTick();     // install the DLSS-SR snoop (present no longer wrapped)
-      PollDLSSGState();   // off the present thread (slDLSSGGetState can take a pacer lock)
+      // NO PollDLSSGState here: slDLSSGGetState MUST be called on the PRESENT thread (SL log:
+      // "slDLSSGGetState must be synchronized with the present thread"). Calling it from this
+      // watchdog thread corrupted DLSS-G frame timing -> "Frame rate over 100ms" -> self-disable.
+      // It is diagnostic only; DLSS-G does not need us to poll it.
       if(p!=lastP && pos==0){ lastP=p; continue; }
       Log("wd: presents=%u evals=%u pos=%d%s", p,e,pos,(p==lastP)?" STALLED":"");
       lastP=p; }
