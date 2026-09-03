@@ -26,11 +26,6 @@ static void StartWatchdog(){
     uint32_t lastP=0;
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
-      NgxProbeTick();     // install the DLSS-SR snoop (present no longer wrapped)
-      // NO PollDLSSGState here: slDLSSGGetState MUST be called on the PRESENT thread (SL log:
-      // "slDLSSGGetState must be synchronized with the present thread"). Calling it from this
-      // watchdog thread corrupted DLSS-G frame timing -> "Frame rate over 100ms" -> self-disable.
-      // It is diagnostic only; DLSS-G does not need us to poll it.
       if(p!=lastP && pos==0){ lastP=p; continue; }
       Log("wd: presents=%u evals=%u pos=%d%s", p,e,pos,(p==lastP)?" STALLED":"");
       lastP=p; }
@@ -127,12 +122,14 @@ static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; s
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
   g_wdPresents.fetch_add(1); g_wdPos.store(1);
-  NgxProbeTick();   // cheap after hooked (one bool); PollDLSSGState moved to the watchdog thread
-  if(kEmitOurMarkers) PresentMarkersBegin();
-  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p markers=%d", (void*)q,(int)kEmitOurMarkers); }
+  NgxProbeTick();      // cheap after hooked (one bool)
+  PollDLSSGState();    // slDLSSGGetState ON THE PRESENT THREAD - synchronizes DLSS-G's inputs-
+                       // processing completion fence (SL warns it MUST be present-thread synced).
+                       // NO PCL markers here - those are on the eval thread (present-thread markers
+                       // took sl.common/sl.pcl locks the pacer needs -> 'Couldn't lock the mutex').
+  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p (poll on present thread)", (void*)q); }
   g_wdPos.store(2);
   VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
-  if(kEmitOurMarkers) PresentMarkersEnd();
   g_wdPos.store(0);
   return r;
 }
@@ -145,7 +142,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
   if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
   PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr; }
   if (!ip) return nullptr;
-  if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return ip; }   // interposer present DIRECT - no fgvk present-thread work
+  if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }   // wrap: PollDLSSGState MUST be on the present thread
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
   return ip;   // everything else: the interposer's own device function
 }

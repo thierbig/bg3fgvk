@@ -155,7 +155,7 @@ void OnDeviceCreated(){
   Log("slReflexSetOptions -> %d", (int)rReflex);
 
   sl::DLSSGOptions o{};
-  o.mode = sl::DLSSGMode::eAuto;   // SL decides when stable - skips loading-screen hitches (was eOn = always-on = trips on load)
+  o.mode = sl::DLSSGMode::eOn;
   o.numFramesToGenerate = 3;   // x4
   sl::ViewportHandle vp{0};
   sl::Result rDlssg = p_slDLSSGSetOptions(vp, o);
@@ -166,7 +166,7 @@ void PollDLSSGState(){
   if(!p_slDLSSGGetState) return;
   sl::DLSSGState st{};
   sl::DLSSGOptions o{};
-  o.mode = sl::DLSSGMode::eAuto;   // SL decides when stable - skips loading-screen hitches (was eOn = always-on = trips on load)
+  o.mode = sl::DLSSGMode::eOn;
   o.numFramesToGenerate = 3;   // x4
   sl::ViewportHandle vp{0};
   if(p_slDLSSGGetState(vp, st, &o) == sl::Result::eOk){
