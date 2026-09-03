@@ -126,20 +126,30 @@ static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; s
 // >100ms frames freezes the game.
 static double g_lastPresentMs = 0.0;
 static uint32_t g_goodStreak = 0;
+static uint32_t g_hitchStreak = 0;
 static bool g_genOn = false;
-static const uint32_t kEnableAfter = 150;   // ~5s smooth at 30fps
-static const double   kGoodMs = 55.0;        // a frame under 55ms (>~18fps) counts as smooth
-static const double   kHitchMs = 90.0;       // a frame over 90ms = hitch -> gate closes
+static const uint32_t kEnableAfter = 150;   // ~5s smooth at 30fps before turning DLSS-G on
+static const double   kGoodMs   = 55.0;      // a frame under 55ms counts as smooth
+static const double   kHitchMs  = 80.0;      // a frame over 80ms is a hitch
+static const uint32_t kHitchRun = 6;         // only a RUN of consecutive hitches (a loading/
+                                             // streaming burst) closes the gate - NOT a one-off
+                                             // gameplay hitch. Prevents enable/disable churn.
 static void StabilityGate(){
   double now = NowMsVk();
   double dt = (g_lastPresentMs>0.0) ? (now - g_lastPresentMs) : 16.0;
   g_lastPresentMs = now;
   if(dt <= kGoodMs){
+    g_hitchStreak = 0;
     if(g_goodStreak < 100000) g_goodStreak++;
     if(!g_genOn && g_goodStreak >= kEnableAfter){ g_genOn=true; Log("stability gate: %u smooth frames -> ENABLE DLSS-G", g_goodStreak); SetDLSSGeneration(true); }
   } else {
-    g_goodStreak = 0;
-    if(g_genOn && dt >= kHitchMs){ g_genOn=false; Log("stability gate: hitch %.0fms -> DISABLE DLSS-G (loading/stream)", dt); SetDLSSGeneration(false); }
+    if(dt >= kHitchMs) g_hitchStreak++;
+    // a sustained burst (world-load / area stream) resets the smooth streak and closes the gate;
+    // isolated gameplay hitches are tolerated (DLSS-G stays on, no churn).
+    if(g_hitchStreak >= kHitchRun){
+      g_goodStreak = 0;
+      if(g_genOn){ g_genOn=false; Log("stability gate: %u-hitch burst (last %.0fms) -> DISABLE DLSS-G (loading/stream)", g_hitchStreak, dt); SetDLSSGeneration(false); }
+    }
   }
 }
 
