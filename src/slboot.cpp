@@ -148,18 +148,25 @@ void OnDeviceCreated(){
   if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit not ready"); return; }
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
-  // DLSS-G requires Reflex ON. Set Reflex before enabling DLSS-G.
+  // DLSS-G requires Reflex ON. Set Reflex now; DLSS-G is enabled LATER by the stability gate.
   sl::ReflexOptions ro{};
   ro.mode = sl::ReflexMode::eLowLatencyWithBoost;   // PureDark config: mReflexMode=2 (Boost), no cap
   sl::Result rReflex = p_slReflexSetOptions(ro);
-  Log("slReflexSetOptions -> %d", (int)rReflex);
+  Log("slReflexSetOptions -> %d (DLSS-G deferred to the stability gate)", (int)rReflex);
+}
 
+// Enable/disable DLSS-G generation. Driven by the present-thread stability gate (vkhooks):
+// enabling DLSS-G during the world-load's frame-time hitches freezes the game (user confirmed:
+// alt-tab, which deactivates DLSS-G, is the ONLY way it loads). So we hold generation OFF until
+// the frame rate is smooth (in-world) and turn it off again if it goes hitchy.
+void SetDLSSGeneration(bool on){
+  if(!p_slDLSSGSetOptions) return;
   sl::DLSSGOptions o{};
-  o.mode = sl::DLSSGMode::eOn;
+  o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
   o.numFramesToGenerate = 3;   // x4
   sl::ViewportHandle vp{0};
-  sl::Result rDlssg = p_slDLSSGSetOptions(vp, o);
-  Log("slDLSSGSetOptions -> %d", (int)rDlssg);
+  sl::Result r = p_slDLSSGSetOptions(vp, o);
+  Log("SetDLSSGeneration(%d) -> %d", (int)on, (int)r);
 }
 
 void PollDLSSGState(){

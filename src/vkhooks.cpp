@@ -19,6 +19,7 @@ uint32_t gGraphicsFamily{};
 std::atomic<uint32_t> g_wdPresents{0};
 std::atomic<uint32_t> g_wdEvals{0};
 std::atomic<int> g_wdPos{0};   // 0 idle; 1 present-enter; 2 pre-proxy-present; 10/11/12 eval stages
+static inline double NowMsVk(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return 1000.0*(double)c.QuadPart/(double)f.QuadPart; }
 static void StartWatchdog(){
   static std::atomic<bool> started{false};
   bool exp=false; if(!started.compare_exchange_strong(exp,true)) return;
@@ -119,15 +120,36 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
 // Flip to true only if generation stops without our markers (i.e. native Reflex isn't enough).
 static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; slReflexSleep dropped inside
 
+// Stability gate: enable DLSS-G only after the frame rate has been smooth for a sustained
+// window (in-world), and turn it off the moment it goes hitchy (loading/streaming). This is
+// the automatic version of the alt-tab trick the user found: DLSS-G active during the load's
+// >100ms frames freezes the game.
+static double g_lastPresentMs = 0.0;
+static uint32_t g_goodStreak = 0;
+static bool g_genOn = false;
+static const uint32_t kEnableAfter = 150;   // ~5s smooth at 30fps
+static const double   kGoodMs = 55.0;        // a frame under 55ms (>~18fps) counts as smooth
+static const double   kHitchMs = 90.0;       // a frame over 90ms = hitch -> gate closes
+static void StabilityGate(){
+  double now = NowMsVk();
+  double dt = (g_lastPresentMs>0.0) ? (now - g_lastPresentMs) : 16.0;
+  g_lastPresentMs = now;
+  if(dt <= kGoodMs){
+    if(g_goodStreak < 100000) g_goodStreak++;
+    if(!g_genOn && g_goodStreak >= kEnableAfter){ g_genOn=true; Log("stability gate: %u smooth frames -> ENABLE DLSS-G", g_goodStreak); SetDLSSGeneration(true); }
+  } else {
+    g_goodStreak = 0;
+    if(g_genOn && dt >= kHitchMs){ g_genOn=false; Log("stability gate: hitch %.0fms -> DISABLE DLSS-G (loading/stream)", dt); SetDLSSGeneration(false); }
+  }
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
   g_wdPresents.fetch_add(1); g_wdPos.store(1);
   NgxProbeTick();      // cheap after hooked (one bool)
-  PollDLSSGState();    // slDLSSGGetState ON THE PRESENT THREAD - synchronizes DLSS-G's inputs-
-                       // processing completion fence (SL warns it MUST be present-thread synced).
-                       // NO PCL markers here - those are on the eval thread (present-thread markers
-                       // took sl.common/sl.pcl locks the pacer needs -> 'Couldn't lock the mutex').
-  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p (poll on present thread)", (void*)q); }
+  StabilityGate();     // enable/disable DLSS-G based on frame smoothness (present thread)
+  PollDLSSGState();    // slDLSSGGetState ON THE PRESENT THREAD - fence sync (SL requires this)
+  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p (stability-gated)", (void*)q); }
   g_wdPos.store(2);
   VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
   g_wdPos.store(0);

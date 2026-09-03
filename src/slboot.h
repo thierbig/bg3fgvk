@@ -16,6 +16,7 @@ struct SlFns {
 SlFns& GetSlFns();
 bool EnsureStreamlineInit();
 void* SlProxyFn(const char* name);
-void OnDeviceCreated();   // Task 4 fills; called from the vkCreateDevice hook (Task 2)
+void OnDeviceCreated();
+void SetDLSSGeneration(bool on);   // Task 4 fills; called from the vkCreateDevice hook (Task 2)
 void PollDLSSGState();    // Task 4 fills; called from the present hook
 }
