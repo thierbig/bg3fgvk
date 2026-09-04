@@ -70,6 +70,15 @@ thread and its image queries return the presented (fake) buffers. Calls from ins
 still reach the loader. If the extender must be excluded for a test, rename `bin\DWrite.dll` and
 `bin\ScriptExtender.dll` to `*.fgvk-off`.
 
+## NVIDIA App overrides
+
+The NVIDIA App applies BG3's per-game DLSS overrides to fgvk's Streamline instance (the on-screen
+indicator says `nvapp_override`, sl.log logs `Override Reported: ...`). A Frame Generation override
+("4x") pins `numFramesToGenerate` to 3 regardless of `DLSSGFrames` or the End hotkey. To let fgvk
+control the multiplier: NVIDIA App -> Graphics -> Baldur's Gate 3 -> DLSS Override, Frame
+Generation -> "Use 3D application setting". The Model Preset override also disables UI
+recomposition inside DLSS-G.
+
 ## Verify arming
 
 1. Launch BG3 with the loaded `fgvk.dll`.
