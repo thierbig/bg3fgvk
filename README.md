@@ -40,41 +40,34 @@ Everything goes into the game's `bin` folder, normally
 Install Native Mod Loader if you do not have it. After that `bin\NativeMods\` exists
 (create it if it does not).
 
-### 2. bg3fgvk
+### 2. Extract the release zip into `bin\`
 
-Copy from the release zip into `bin\NativeMods\`:
-
-```
-fgvk.dll          the mod
-fgvk-stack.exe    optional: diagnostics helper, only runs if the game ever freezes
-```
-
-### 3. NVIDIA Streamline runtime
-
-DLSS Frame Generation is NVIDIA code that ships in the Streamline SDK. Download
-**`streamline-sdk-v2.12.0.zip`** from the official release page
-<https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0>, open it, and copy these seven
-files from its `bin\x64\` folder **directly into `bin\`** (next to `bg3.exe`, not into
-`NativeMods`):
+The release zip is laid out like the `bin` folder. Extract its **contents** straight into `bin\`
+(say yes to merging the `NativeMods` folder). You end up with:
 
 ```
-sl.interposer.dll
-sl.common.dll
-sl.dlss_g.dll
-sl.pcl.dll
-sl.reflex.dll
-nvngx_dlssg.dll
-NvLowLatencyVk.dll
+bin\NativeMods\fgvk.dll          the mod
+bin\NativeMods\fgvk-stack.exe    optional diagnostics helper, only runs if the game ever freezes
+bin\sl.interposer.dll            NVIDIA Streamline runtime (all seven from one Streamline release)
+bin\sl.common.dll
+bin\sl.dlss_g.dll
+bin\sl.pcl.dll
+bin\sl.reflex.dll
+bin\nvngx_dlssg.dll
+bin\NvLowLatencyVk.dll
+bin\README.md, INSTALL.txt, LICENSE.txt, STREAMLINE-LICENSE.txt
 ```
 
-Take them from `bin\x64\` itself, **not** from `bin\x64\development\` (those are debug builds
-with an on-screen overlay). All seven must come from the same Streamline version; do not mix them
-with copies from another mod. A newer release zip than 2.12.0 is fine as long as all seven come
-from the same zip.
-
+The seven `sl.*` / `nvngx_dlssg` / `NvLowLatencyVk` files are the DLSS Frame Generation runtime
+from NVIDIA's Streamline SDK 2.12.0, bundled unmodified. If another mod already put different
+versions of these files in `bin\`, replace them: all seven must come from one Streamline release.
 Leave the game's own `nvngx_dlss.dll` alone; it is not part of this.
 
-### 4. First launch
+Want a newer Streamline than the bundled one? Download `streamline-sdk-vX.Y.Z.zip` from
+<https://github.com/NVIDIA-RTX/Streamline/releases> and copy the same seven files from its
+`bin\x64\` folder (not `bin\x64\development\`, those are debug builds) over the ones in `bin\`.
+
+### 3. First launch
 
 Start the game, load a save, and play for a few seconds. On first launch the mod writes its
 config file `bin\NativeMods\fgvk.ini` with defaults and a log `bin\fgvk.log`.
@@ -204,17 +197,17 @@ cmake --build build --config Release
 ```
 
 Output: `build\Release\fgvk.dll` and `build\Release\fgvk-stack.exe`. Copy both into
-`bin\NativeMods\`.
+`bin\NativeMods\`. `redist\` holds the seven Streamline runtime files that ship in the release
+zip; `package.ps1 -Version vX.Y.Z [-Build]` assembles `dist\bg3fgvk-vX.Y.Z.zip`.
 
 ---
 
 ## Credits and licenses
 
 - bg3fgvk is released under the MIT License (see `LICENSE`).
-- NVIDIA Streamline SDK (`sl.*.dll`, headers) is MIT licensed by NVIDIA. The DLSS Frame
-  Generation plugin (`nvngx_dlssg.dll`) and `NvLowLatencyVk.dll` are NVIDIA binaries
-  distributed under the terms in the Streamline release package. That is why you download them
-  from NVIDIA's release page rather than from here.
+- The NVIDIA Streamline SDK 2.12.0 runtime (`sl.*.dll`, `nvngx_dlssg.dll`, `NvLowLatencyVk.dll`)
+  is bundled unmodified from NVIDIA's release package under its license, included as
+  `STREAMLINE-LICENSE.txt`. Copyright NVIDIA Corporation.
 - Microsoft Detours (MIT) for the hooks.
 - Norbyte's Baldur's Gate 3 Script Extender, which this mod is built to coexist with.
 - PureDark's frame generation mod for Baldur's Gate 3, whose DLSS-G input recipe served as the
