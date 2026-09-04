@@ -27,7 +27,15 @@ std::atomic<int> g_wdPos{0};
 static std::atomic<long long> g_wdPosSinceUs{0};
 static std::atomic<bool> g_genOn{false};   // DLSS-G currently requested on (gate state)
 static inline long long NowUs(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (long long)((double)c.QuadPart*1e6/(double)f.QuadPart); }
-struct PosScope { int prev; PosScope(int code){ prev=g_wdPos.exchange(code); g_wdPosSinceUs.store(NowUs()); } ~PosScope(){ g_wdPos.store(prev); g_wdPosSinceUs.store(NowUs()); } };
+// Position tracking is for the present thread only: NGX/SL worker threads can reach our
+// wrappers through the exported vkGetDeviceProcAddr and must not clobber it.
+static std::atomic<uint32_t> g_presentTid{0};
+struct PosScope {
+  int prev; bool on;
+  PosScope(int code){ uint32_t t=g_presentTid.load(); on = (t==0 || t==(uint32_t)GetCurrentThreadId());
+    if(on){ prev=g_wdPos.exchange(code); g_wdPosSinceUs.store(NowUs()); } }
+  ~PosScope(){ if(on){ g_wdPos.store(prev); g_wdPosSinceUs.store(NowUs()); } }
+};
 
 // On a stall the watchdog spawns fgvk-stack.exe (next to this DLL) to dump every thread's stack
 // out-of-process into bin\fgvk-stacks.log - the only way to see what the present thread and
@@ -178,6 +186,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
   g_wdPresents.fetch_add(1);
+  if(!g_presentTid.load()) g_presentTid.store((uint32_t)GetCurrentThreadId());
   PosScope _p(1);
   NgxProbeTick();                  // cheap after hooked (one bool)
   EvalGate(ConsumeEvalSeen());     // slDLSSGSetOptions on the present thread, before this present (guide 6.0)
@@ -242,12 +251,15 @@ static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip){
 }
 
 // ---- wrapped device-proc-addr: hand the game interposer device fns, wrap present/swapchain --
-static PFN_vkGetDeviceProcAddr o_GDPA_real{};   // real loader GDPA, for re-entrant forwards
+static PFN_vkGetDeviceProcAddr o_GDPA_real{};   // real loader GDPA (Detours trampoline once the export is hooked)
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev, const char* name){
   if (!name) return nullptr;
   // Re-entrant (interposer forwarding to the driver): go to the real loader, not the interposer.
   if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
-  PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA ? ip_GDPA(dev, name) : nullptr; }
+  // Before the interposer exists (early third-party resolution) there is nothing to wrap yet.
+  if (!ip_GDPA) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)w_GetDeviceProcAddr;   // keep later lookups in our view
+  PFN_vkVoidFunction ip; { Reentry _; ip = ip_GDPA(dev, name); }
   if (!ip) return nullptr;
   if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }   // wrap: PollDLSSGState MUST be on the present thread
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
@@ -291,22 +303,69 @@ void* LoaderFn(const char* name){
   return (ip_GIPA && gInstance) ? (void*)ip_GIPA(gInstance, name) : nullptr;
 }
 
+// ---- exported-entry detours: third parties see the game's view ----------------------------
+// The game resolves everything through vkGetInstanceProcAddr (hooked above), but overlays and
+// the Script Extender link vulkan-1.lib and call the EXPORTS: vkGetDeviceProcAddr hands them
+// the driver's entry points (which they then Detour - putting their code, locks included, on
+// Streamline's pacer thread: the 22:18 deadlock), and vkGetSwapchainImagesKHR hands them the
+// REAL swapchain images while the game renders into Streamline's fake buffers (their overlay
+// never shows). Routing the exports through the same wrappers the game gets fixes both: their
+// detours land on our wrappers on the game thread, their image queries return the buffers the
+// game actually presents. Calls from inside the interposer (ForceReal) still reach the loader.
+static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetDeviceProcAddrExport(VkDevice dev, const char* name){
+  if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  return w_GetDeviceProcAddr(dev, name);
+}
+static PFN_vkGetSwapchainImagesKHR o_GetSwapchainImagesKHR_export{};
+static PFN_vkAcquireNextImageKHR   o_AcquireNextImageKHR_export{};
+static PFN_vkQueuePresentKHR       o_QueuePresentKHR_export{};
+// Resolve the game-view function once per name via our own GDPA wrapper (interposer + wrappers).
+template <typename F> static F GameView(const char* name, F& cache, VkDevice dev){
+  if(!cache && ip_GDPA){ cache = (F)w_GetDeviceProcAddr(dev, name); }
+  return cache;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL h_GetSwapchainImagesKHRExport(VkDevice d, VkSwapchainKHR sc, uint32_t* n, VkImage* imgs){
+  static PFN_vkGetSwapchainImagesKHR gv{}; PFN_vkGetSwapchainImagesKHR f = ForceReal() ? nullptr : GameView("vkGetSwapchainImagesKHR", gv, d);
+  static bool logged=false; if(f && !logged){ logged=true; Log("export vkGetSwapchainImagesKHR from tid=%lu routed to the game's (fake-buffer) view", (unsigned long)GetCurrentThreadId()); }
+  return f ? f(d,sc,n,imgs) : o_GetSwapchainImagesKHR_export(d,sc,n,imgs);
+}
+static VKAPI_ATTR VkResult VKAPI_CALL h_AcquireNextImageKHRExport(VkDevice d, VkSwapchainKHR sc, uint64_t t, VkSemaphore s, VkFence fe, uint32_t* idx){
+  static PFN_vkAcquireNextImageKHR gv{}; PFN_vkAcquireNextImageKHR f = ForceReal() ? nullptr : GameView("vkAcquireNextImageKHR", gv, d);
+  return f ? f(d,sc,t,s,fe,idx) : o_AcquireNextImageKHR_export(d,sc,t,s,fe,idx);
+}
+static VKAPI_ATTR VkResult VKAPI_CALL h_QueuePresentKHRExport(VkQueue q, const VkPresentInfoKHR* pi){
+  static PFN_vkQueuePresentKHR gv{}; PFN_vkQueuePresentKHR f = (ForceReal() || !gDevice) ? nullptr : GameView("vkQueuePresentKHR", gv, gDevice);
+  return f ? f(q,pi) : o_QueuePresentKHR_export(q,pi);
+}
+
 void InstallVkHooks(){
   HMODULE vk = GetModuleHandleA("vulkan-1.dll");
   if(!vk) vk = LoadLibraryA("vulkan-1.dll");
   if(!vk){ Log("InstallVkHooks: vulkan-1.dll not found"); return; }
   o_GIPA = (PFN_vkGetInstanceProcAddr)GetProcAddress(vk, "vkGetInstanceProcAddr");
   o_GDPA_real = (PFN_vkGetDeviceProcAddr)GetProcAddress(vk, "vkGetDeviceProcAddr");
-  if(!o_GIPA){ Log("InstallVkHooks: vkGetInstanceProcAddr export missing"); return; }
+  o_GetSwapchainImagesKHR_export = (PFN_vkGetSwapchainImagesKHR)GetProcAddress(vk, "vkGetSwapchainImagesKHR");
+  o_AcquireNextImageKHR_export   = (PFN_vkAcquireNextImageKHR)GetProcAddress(vk, "vkAcquireNextImageKHR");
+  o_QueuePresentKHR_export       = (PFN_vkQueuePresentKHR)GetProcAddress(vk, "vkQueuePresentKHR");
+  if(!o_GIPA || !o_GDPA_real){ Log("InstallVkHooks: vkGet*ProcAddr export missing"); return; }
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourAttach(&(PVOID&)o_GIPA,(PVOID)h_GetInstanceProcAddr);
+  DetourAttach(&(PVOID&)o_GDPA_real,(PVOID)h_GetDeviceProcAddrExport);
+  if(o_GetSwapchainImagesKHR_export) DetourAttach(&(PVOID&)o_GetSwapchainImagesKHR_export,(PVOID)h_GetSwapchainImagesKHRExport);
+  if(o_AcquireNextImageKHR_export)   DetourAttach(&(PVOID&)o_AcquireNextImageKHR_export,(PVOID)h_AcquireNextImageKHRExport);
+  if(o_QueuePresentKHR_export)       DetourAttach(&(PVOID&)o_QueuePresentKHR_export,(PVOID)h_QueuePresentKHRExport);
   LONG r = DetourTransactionCommit();
-  Log("InstallVkHooks: GIPA hooked commit=%ld (o_GIPA=%p)", r,(void*)o_GIPA);
+  Log("InstallVkHooks: exports hooked commit=%ld (GIPA=%p GDPA=%p getImages=%p acquire=%p present=%p)", r,
+      (void*)o_GIPA,(void*)o_GDPA_real,(void*)o_GetSwapchainImagesKHR_export,(void*)o_AcquireNextImageKHR_export,(void*)o_QueuePresentKHR_export);
 }
 
 void RemoveVkHooks(){
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourDetach(&(PVOID&)o_GIPA,(PVOID)h_GetInstanceProcAddr);
+  DetourDetach(&(PVOID&)o_GDPA_real,(PVOID)h_GetDeviceProcAddrExport);
+  if(o_GetSwapchainImagesKHR_export) DetourDetach(&(PVOID&)o_GetSwapchainImagesKHR_export,(PVOID)h_GetSwapchainImagesKHRExport);
+  if(o_AcquireNextImageKHR_export)   DetourDetach(&(PVOID&)o_AcquireNextImageKHR_export,(PVOID)h_AcquireNextImageKHRExport);
+  if(o_QueuePresentKHR_export)       DetourDetach(&(PVOID&)o_QueuePresentKHR_export,(PVOID)h_QueuePresentKHRExport);
   DetourTransactionCommit();
 }
 }

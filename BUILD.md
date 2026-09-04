@@ -51,14 +51,21 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
 
-## Known incompatibility: the custom Script Extender build
+## Script Extender coexistence
 
-The `upscaler-run` build of BG3SE (C:\Dev\bg3se-upscaler) detours the driver's Vulkan entry
-points and serializes presents under `fgQueueMutex_`, including the ones Streamline's pacer
-thread makes. Its outermost present holds that mutex while calling into the interposer, which
-waits on the pacer, which needs the mutex: deadlock, black screen, freeze (`fgvk-stacks.log`
-shows `sl.dlss_g -> sl.common -> BG3ScriptExtender -> vulkan-1`). Until that build is fixed, run
-with its loaders renamed (`DWrite.dll.fgvk-off`, `ScriptExtender.dll.fgvk-off`).
+BG3SE (stock and the custom `upscaler-run` build) links `vulkan-1.lib` and resolves the
+functions it hooks through the EXPORTED `vkGetDeviceProcAddr`, then Detours what it gets. Without
+help that is the driver's entry points, which puts extender code (and its `fgQueueMutex_`) on
+Streamline's pacer thread (deadlock: `fgvk-stacks.log` shows `sl.dlss_g -> sl.common ->
+BG3ScriptExtender -> vulkan-1`), and its overlay fetches the driver's real swapchain images while
+the game renders into Streamline's fake buffers (overlay never shows).
+
+fgvk therefore also detours the vulkan-1 exports `vkGetDeviceProcAddr`, `vkGetSwapchainImagesKHR`,
+`vkAcquireNextImageKHR` and `vkQueuePresentKHR`: any import-based caller gets the same view the
+game gets (fgvk wrappers + interposer), so extender detours land on fgvk's wrappers on the game
+thread and its image queries return the presented (fake) buffers. Calls from inside the interposer
+still reach the loader. If the extender must be excluded for a test, rename `bin\DWrite.dll` and
+`bin\ScriptExtender.dll` to `*.fgvk-off`.
 
 ## Verify arming
 
