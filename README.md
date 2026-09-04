@@ -12,6 +12,17 @@ Measured on an RTX 50-series card at 2560x1440 with DLSS Quality: a 30 to 35 fps
 roughly 120 to 140 fps with x4 (Streamline itself reports the multiplier), with the GPU
 otherwise untouched.
 
+## Quick start
+
+1. Install **Native Mod Loader** for Baldur's Gate 3 (Nexus Mods). It creates `bin\NativeMods\`.
+2. Download `bg3fgvk-vX.Y.Z.zip` from the Releases page and extract its contents into the game's
+   `bin\` folder (the one with `bg3.exe`). Merge the `NativeMods` folder when asked.
+3. In the game's Video settings make sure the renderer is **Vulkan** and **DLSS** is on (any
+   quality, or DLAA). Windows must have **Hardware-accelerated GPU scheduling** on.
+
+Load a save. Frame generation starts by itself a couple of seconds into the world. Numpad `*`
+turns it off and on. That is all.
+
 ---
 
 ## Requirements
