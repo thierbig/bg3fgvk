@@ -35,6 +35,29 @@ static PFun_slReflexSetOptions* p_slReflexSetOptions{};
 static PFun_slDLSSGSetOptions* p_slDLSSGSetOptions{};
 static PFun_slDLSSGGetState* p_slDLSSGGetState{};
 
+// The Streamline runtime ships in a 'Streamline' folder next to fgvk.dll. Loading the interposer
+// from there by full path makes Streamline search that folder for its plugins, nvngx_dlssg.dll
+// and NvLowLatencyVk.dll (its default plugin path is the interposer's own directory; we also pass
+// it explicitly). Fallback: the seven files next to bg3.exe. ONE loader for every caller - the
+// first release build resolved the proxy functions through a plain LoadLibraryA("sl.interposer.dll")
+// before this ran, found nothing next to bg3.exe, and the game failed to create its instance.
+static wchar_t s_slDir[MAX_PATH]{};
+static HMODULE LoadInterposer(){
+  if(g_sl) return g_sl;
+  g_sl = GetModuleHandleA("sl.interposer.dll");
+  if(g_sl){ Log("sl.interposer already loaded by someone else (%p) - reusing it", (void*)g_sl); return g_sl; }
+  HMODULE self{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)&LoadInterposer,&self);
+  wchar_t dir[MAX_PATH]{}; GetModuleFileNameW(self, dir, MAX_PATH); wchar_t* s=wcsrchr(dir,L'\\'); if(s) *(s+1)=0;
+  wchar_t interposer[MAX_PATH]; swprintf(interposer, MAX_PATH, L"%sStreamline\\sl.interposer.dll", dir);
+  if(GetFileAttributesW(interposer)!=INVALID_FILE_ATTRIBUTES){
+    swprintf(s_slDir, MAX_PATH, L"%sStreamline", dir);
+    g_sl = LoadLibraryW(interposer);
+    Log("Streamline runtime: %S (%s)", s_slDir, g_sl?"loaded":"LOAD FAILED");
+  }
+  if(!g_sl){ s_slDir[0]=0; g_sl = LoadLibraryA("sl.interposer.dll"); Log("Streamline runtime: next to bg3.exe (%s)", g_sl?"loaded":"NOT FOUND"); }
+  return g_sl;
+}
+
 // Resolves slInit/slSetVulkanInfo/slGetFeatureFunction from the interposer module
 // and calls slInit once. Returns true if slInit succeeded.
 static bool EnsureSlInit(){
@@ -43,27 +66,7 @@ static bool EnsureSlInit(){
   if(s_tried) return s_armed;
   s_tried = true;
 
-  // The Streamline runtime ships in a 'Streamline' folder next to fgvk.dll. Loading the
-  // interposer from there by full path makes Streamline search that folder for its plugins,
-  // nvngx_dlssg.dll and NvLowLatencyVk.dll (its default plugin path is the interposer's own
-  // directory; we also pass it explicitly). Fallback: the seven files next to bg3.exe.
-  static wchar_t s_slDir[MAX_PATH]{};
-  if(!g_sl){
-    g_sl = GetModuleHandleA("sl.interposer.dll");
-    if(g_sl){ Log("sl.interposer already loaded by someone else (%p) - reusing it", (void*)g_sl); }
-    else {
-      HMODULE self{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)&EnsureSlInit,&self);
-      wchar_t dir[MAX_PATH]{}; GetModuleFileNameW(self, dir, MAX_PATH); wchar_t* s=wcsrchr(dir,L'\\'); if(s) *(s+1)=0;
-      wchar_t interposer[MAX_PATH]; swprintf(interposer, MAX_PATH, L"%sStreamline\\sl.interposer.dll", dir);
-      if(GetFileAttributesW(interposer)!=INVALID_FILE_ATTRIBUTES){
-        swprintf(s_slDir, MAX_PATH, L"%sStreamline", dir);
-        g_sl = LoadLibraryW(interposer);
-        Log("Streamline runtime: %S (%s)", s_slDir, g_sl?"loaded":"LOAD FAILED");
-      }
-      if(!g_sl){ s_slDir[0]=0; g_sl = LoadLibraryA("sl.interposer.dll"); Log("Streamline runtime: next to bg3.exe (%s)", g_sl?"loaded":"NOT FOUND"); }
-    }
-  }
-  if(!g_sl){ Log("EnsureSlInit: sl.interposer.dll not found - put the Streamline folder next to fgvk.dll"); return false; }
+  if(!LoadInterposer()){ Log("EnsureSlInit: sl.interposer.dll not found - put the Streamline folder next to fgvk.dll"); return false; }
 
   p_slInit = (PFun_slInit*)GetProcAddress(g_sl, "slInit");
   p_slSetVulkanInfo = (PFun_slSetVulkanInfo*)GetProcAddress(g_sl, "slSetVulkanInfo");
@@ -159,8 +162,8 @@ static bool EnsureFeatureFunctions(){
 
 bool EnsureStreamlineInit(){ return EnsureSlInit(); }
 void* SlProxyFn(const char* name){
-  if(!g_sl){ g_sl=GetModuleHandleA("sl.interposer.dll"); if(!g_sl) g_sl=LoadLibraryA("sl.interposer.dll"); }
-  return g_sl ? (void*)GetProcAddress(g_sl, name) : nullptr;
+  HMODULE m = LoadInterposer();
+  return m ? (void*)GetProcAddress(m, name) : nullptr;
 }
 
 void OnDeviceCreated(){
