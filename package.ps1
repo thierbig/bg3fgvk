@@ -68,7 +68,7 @@ INSTALL
 Load a save. Frame generation starts by itself a couple of seconds into the world.
 Numpad * turns it off/on. Settings: bin\NativeMods\fgvk.ini (created on first launch).
 
-Requirements: RTX 40 (x2) or RTX 50 (x3/x4). Not compatible with PureDark's upscaler.dll.
+Requirements: RTX 40 (x2) or RTX 50 (x3/x4), Windows 10 20H1+, Hardware-accelerated GPU scheduling ON.
 Full guide, configuration and troubleshooting: README.md
 "@ | Set-Content -Encoding UTF8 "$stage\INSTALL.txt"
 

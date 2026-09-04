@@ -31,6 +31,8 @@ turns it off and on. That is all.
 | | |
 |---|---|
 | GPU | NVIDIA RTX 40 series for x2. RTX 50 series for x3 and x4 (multi frame generation). |
+| Driver | A current GeForce driver. The bundled Streamline 2.12 runtime was validated on 610.xx. |
+| Windows | Windows 10 20H1 (build 19041) or newer. **Hardware-accelerated GPU scheduling must be ON** (Settings, System, Display, Graphics, Default graphics settings). DLSS-G refuses to run without it. |
 | Game | Baldur's Gate 3 in **Vulkan** mode (the default `bg3.exe`, not DirectX 11). |
 | In-game | **DLSS must be enabled** in Video settings (any quality level, or DLAA). Frame generation reads the game's DLSS inputs; with DLSS off it stays idle. |
 | Loader | **Native Mod Loader** for Baldur's Gate 3 (on Nexus Mods; the `bink2w64.dll` replacement). It loads every DLL in `bin\NativeMods\`. |
