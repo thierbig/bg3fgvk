@@ -29,6 +29,10 @@ typedef void (*PFN_NVSDK_NGX_ProgressCallback_C)(float, bool*);
 typedef NVSDK_NGX_Result (__cdecl *PFN_NgxGetVoidPointer)(NVSDK_NGX_Parameter*, const char*, void**);
 typedef NVSDK_NGX_Result (__cdecl *PFN_NgxGetF)(NVSDK_NGX_Parameter*, const char*, float*);
 typedef NVSDK_NGX_Result (__cdecl *PFN_NgxGetUI)(NVSDK_NGX_Parameter*, const char*, unsigned int*);
+typedef NVSDK_NGX_Result (__cdecl *PFN_NgxGetI)(NVSDK_NGX_Parameter*, const char*, int*);
+// NVSDK_NGX_DLSS_Feature_Flags (nvsdk_ngx_defs.h) - read from the game's own DLSS-SR create call
+enum : int { kNgxFlagIsHDR=1<<0, kNgxFlagMVLowRes=1<<1, kNgxFlagMVJittered=1<<2, kNgxFlagDepthInverted=1<<3,
+             kNgxFlagDoSharpening=1<<4, kNgxFlagAutoExposure=1<<5, kNgxFlagAlphaUpscaling=1<<6 };
 typedef NVSDK_NGX_Result (__cdecl *PFN_NgxEvaluateFeature)(VkCommandBuffer, const NVSDK_NGX_Handle*,
     const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback_C);
 
@@ -52,6 +56,8 @@ static PFN_NgxCreateFeature o_NgxCreateFeature{};
 static PFN_NgxGetVoidPointer p_GetVoidPointer{};
 static PFN_NgxGetF p_GetF{};
 static PFN_NgxGetUI p_GetUI{};
+static PFN_NgxGetI p_GetI{};
+static std::atomic<int> g_srCreateFlags{-1};   // the game's DLSS-SR feature flags (-1 = not seen yet)
 static bool g_hooked=false; static int g_probeDelay=0;
 static bool g_logHookLive=false, g_logFirstInputs=false, g_logTagFail=false, g_logConstFail=false,
             g_logHudTag=false, g_logTokenShift=false, g_logSubmitOk=false;
@@ -277,10 +283,13 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   c.cameraFwd = sl::float3(0,0,1);
   c.cameraNear = 0.05f; c.cameraFar = 10000.f;
   c.cameraFOV = 0.84f; c.cameraAspectRatio = aspect;
-  c.depthInverted = sl::Boolean::eTrue;   // PureDark capture: DepthInverted=1 (BG3 reverse-Z)
+  // Flags straight from the game's DLSS-SR create call when we saw it (PureDark's capture agrees:
+  // DepthInverted=1); until then the captured recipe's values.
+  int srf = g_srCreateFlags.load();
+  c.depthInverted = (srf < 0 || (srf & kNgxFlagDepthInverted)) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   c.cameraMotionIncluded = sl::Boolean::eTrue;
   c.motionVectors3D = sl::Boolean::eFalse;
-  c.motionVectorsJittered = sl::Boolean::eFalse;
+  c.motionVectorsJittered = (srf > 0 && (srf & kNgxFlagMVJittered)) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   c.reset = g_in.reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
   double _c0=NowMs();
   auto constRes = fns.setConstants(c, *token, vp);
@@ -402,6 +411,18 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
 // Diagnostic parity with PureDark's hk_NVSDK_NGX_VULKAN_CreateFeature: log the SR feature id.
 static NVSDK_NGX_Result __cdecl h_NgxCreateFeature(VkCommandBuffer cmd, unsigned int featureId,
     NVSDK_NGX_Parameter* p, NVSDK_NGX_Handle** outH){
+  // featureId 1 = DLSS super resolution: its creation flags tell us how the game renders its
+  // depth/mvecs (inverted depth, jittered mvecs, HDR) - the ground truth for our SL constants.
+  if(featureId==1 && p && p_GetI){
+    int flags=0;
+    if(p_GetI(p,"DLSS.Feature.Create.Flags",&flags)==NGX_Success){
+      g_srCreateFlags.store(flags);
+      unsigned w=0,h=0,ow=0,oh=0; if(p_GetUI){ p_GetUI(p,"Width",&w); p_GetUI(p,"Height",&h); p_GetUI(p,"OutWidth",&ow); p_GetUI(p,"OutHeight",&oh); }
+      Log("DLSS-SR create: flags=0x%x [HDR=%d MVLowRes=%d MVJittered=%d DepthInverted=%d AutoExposure=%d] render %ux%u -> %ux%u",
+          flags, !!(flags&kNgxFlagIsHDR), !!(flags&kNgxFlagMVLowRes), !!(flags&kNgxFlagMVJittered), !!(flags&kNgxFlagDepthInverted),
+          !!(flags&kNgxFlagAutoExposure), w,h,ow,oh);
+    }
+  }
   static bool logged=false; if(!logged){ logged=true; Log("NGX CreateFeature featureId=%u", featureId); }
   return o_NgxCreateFeature(cmd, featureId, p, outH);
 }
@@ -424,6 +445,7 @@ void NgxProbeTick(){
     p_GetVoidPointer=gp;
     p_GetF=(PFN_NgxGetF)GetProcAddress(m,"NVSDK_NGX_Parameter_GetF");
     p_GetUI=(PFN_NgxGetUI)GetProcAddress(m,"NVSDK_NGX_Parameter_GetUI");
+    p_GetI=(PFN_NgxGetI)GetProcAddress(m,"NVSDK_NGX_Parameter_GetI");
     return true; });
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourAttach(&(PVOID&)o_NgxEvaluate,(PVOID)h_NgxEvaluate);
