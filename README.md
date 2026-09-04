@@ -14,7 +14,9 @@ otherwise untouched.
 
 ## Quick start
 
-1. Install **Native Mod Loader** for Baldur's Gate 3 (Nexus Mods). It creates `bin\NativeMods\`.
+1. Install [**Native Mod Loader**](https://www.nexusmods.com/baldursgate3/mods/944) (manual
+   install: extract its `bin` folder over the game's `bin` folder and let it replace
+   `bink2w64.dll`). It loads every DLL in `bin\NativeMods\`.
 2. Download `bg3fgvk-vX.Y.Z.zip` from the Releases page and extract its contents into the game's
    `bin\` folder (the one with `bg3.exe`). Merge the `NativeMods` folder when asked. That puts
    `fgvk.dll` and a `Streamline` folder into `bin\NativeMods\`.
@@ -35,7 +37,7 @@ turns it off and on. That is all.
 | Windows | Windows 10 20H1 (build 19041) or newer. **Hardware-accelerated GPU scheduling must be ON** (Settings, System, Display, Graphics, Default graphics settings). DLSS-G refuses to run without it. |
 | Game | Baldur's Gate 3 in **Vulkan** mode (the default `bg3.exe`, not DirectX 11). |
 | In-game | **DLSS must be enabled** in Video settings (any quality level, or DLAA). Frame generation reads the game's DLSS inputs; with DLSS off it stays idle. |
-| Loader | **Native Mod Loader** for Baldur's Gate 3 (on Nexus Mods; the `bink2w64.dll` replacement). It loads every DLL in `bin\NativeMods\`. |
+| Loader | [Native Mod Loader](https://www.nexusmods.com/baldursgate3/mods/944) (the `bink2w64.dll` replacement). It loads every DLL in `bin\NativeMods\`. |
 
 ---
 
@@ -46,8 +48,18 @@ Everything goes into the game's `bin` folder, normally
 
 ### 1. Native Mod Loader
 
-Install Native Mod Loader if you do not have it. After that `bin\NativeMods\` exists
-(create it if it does not).
+Skip this if you already have it (you do if `bin\NativeMods\` exists with other `.dll` mods in it).
+
+1. Download **Native Mod Loader** from Nexus Mods:
+   <https://www.nexusmods.com/baldursgate3/mods/944> (Files tab, manual download; do not use a
+   mod manager for it).
+2. Open the zip. It contains a `bin` folder with `bink2w64.dll` (the loader) and
+   `bink2w64_original.dll` (the game's original, kept as a backup).
+3. Extract that `bin` folder over the game's `bin` folder and confirm replacing `bink2w64.dll`.
+4. Make sure `bin\NativeMods\` exists; create the folder if it does not.
+
+The loader itself does nothing visible. Every `.dll` placed in `bin\NativeMods\` is loaded when
+the game starts, and `bin\NativeModLoader.log` lists what it loaded.
 
 ### 2. Extract the release zip into `bin\`
 

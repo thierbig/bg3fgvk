@@ -57,7 +57,9 @@ Copy-Item "$root\LICENSE"   "$stage\LICENSE.txt"
 bg3fgvk $Version - DLSS Frame Generation for Baldur's Gate 3 (Vulkan)
 
 INSTALL
-  1. Install "Native Mod Loader" for Baldur's Gate 3 (Nexus Mods). It creates bin\NativeMods\.
+  1. Install "Native Mod Loader": https://www.nexusmods.com/baldursgate3/mods/944
+     (manual install: extract its bin folder over the game's bin folder, replacing bink2w64.dll).
+     Create bin\NativeMods\ if it does not exist.
   2. Extract the CONTENTS of this zip into the game's bin\ folder (where bg3.exe is).
      If asked, merge the NativeMods folder. You end up with:
         bin\NativeMods\fgvk.dll
