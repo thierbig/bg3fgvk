@@ -104,8 +104,15 @@ static bool EnsureSlInit(){
   static wchar_t s_logDir[MAX_PATH]{};
   { GetModuleFileNameW(nullptr, s_logDir, MAX_PATH); wchar_t* s=wcsrchr(s_logDir,L'\\'); if(s) *s=0; }
   p.pathToLogsAndData = s_logDir;
-  static const wchar_t* s_pluginPaths[1];
-  if(s_slDir[0]){ s_pluginPaths[0] = s_slDir; p.pathsToPlugins = s_pluginPaths; p.numPathsToPlugins = 1; }
+  // Plugin search: Streamline stops at the FIRST directory that holds plugins, so our folder
+  // wins and stray sl.*.dll copies next to bg3.exe are never loaded. NGX, however, receives
+  // EVERY path in this list as a feature-DLL search path, and the game's own DLSS Super
+  // Resolution DLL (nvngx_dlss.dll) lives next to bg3.exe - without that second entry NGX
+  // reports "nvngx_dlss.dll doesn't exist in any of the search paths", the game's DLSS never
+  // starts, and there is nothing for frame generation to attach to (12:30 run).
+  static const wchar_t* s_pluginPaths[2];
+  if(s_slDir[0]){ s_pluginPaths[0] = s_slDir; s_pluginPaths[1] = s_logDir; p.pathsToPlugins = s_pluginPaths; p.numPathsToPlugins = 2;
+    Log("Streamline plugin path: %S ; NGX also searches %S", s_slDir, s_logDir); }
 
   sl::Result r = p_slInit(p, sl::kSDKVersion);
   Log("slInit -> %d", (int)r);
