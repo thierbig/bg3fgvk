@@ -1,5 +1,9 @@
 # Builds the release zip: bg3fgvk-<version>.zip, laid out like the game's bin\ folder so the
-# user extracts it straight into bin\.
+# user extracts it straight into bin\:
+#   NativeMods\fgvk.dll                 the mod
+#   NativeMods\Streamline\*.dll         NVIDIA Streamline runtime (seven files) + license + readme
+#   README.md, INSTALL.txt, LICENSE.txt
+# fgvk-stack.exe (developer diagnostics) is deliberately NOT packaged.
 #   .\package.ps1 -Version v0.1.0            (uses the existing build\Release output)
 #   .\package.ps1 -Version v0.1.0 -Build     (rebuilds first)
 param(
@@ -16,10 +20,8 @@ if ($Build) {
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 }
 
-$dll   = "$root\build\Release\fgvk.dll"
-$stack = "$root\build\Release\fgvk-stack.exe"
-if (-not (Test-Path $dll))   { throw "missing $dll - build first (-Build)" }
-if (-not (Test-Path $stack)) { throw "missing $stack - build first (-Build)" }
+$dll = "$root\build\Release\fgvk.dll"
+if (-not (Test-Path $dll)) { throw "missing $dll - build first (-Build)" }
 
 $runtime = @('sl.interposer.dll','sl.common.dll','sl.dlss_g.dll','sl.pcl.dll','sl.reflex.dll','nvngx_dlssg.dll','NvLowLatencyVk.dll')
 foreach ($f in $runtime) { if (-not (Test-Path "$root\redist\$f")) { throw "missing redist\$f" } }
@@ -27,26 +29,47 @@ foreach ($f in $runtime) { if (-not (Test-Path "$root\redist\$f")) { throw "miss
 $dist  = "$root\dist"
 $stage = "$dist\bg3fgvk-$Version"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-New-Item -ItemType Directory -Force "$stage\NativeMods" | Out-Null
+New-Item -ItemType Directory -Force "$stage\NativeMods\Streamline" | Out-Null
 
-# bin\NativeMods\ : the mod
-Copy-Item $dll   "$stage\NativeMods\fgvk.dll"
-Copy-Item $stack "$stage\NativeMods\fgvk-stack.exe"
-# bin\ : NVIDIA Streamline runtime (all seven from one Streamline release)
-foreach ($f in $runtime) { Copy-Item "$root\redist\$f" "$stage\$f" }
-# docs
-Copy-Item "$root\README.md"  "$stage\README.md"
-Copy-Item "$root\LICENSE"    "$stage\LICENSE.txt"
-Copy-Item "$root\redist\STREAMLINE-LICENSE.txt" "$stage\STREAMLINE-LICENSE.txt"
+Copy-Item $dll "$stage\NativeMods\fgvk.dll"
+foreach ($f in $runtime) { Copy-Item "$root\redist\$f" "$stage\NativeMods\Streamline\$f" }
+Copy-Item "$root\redist\STREAMLINE-LICENSE.txt" "$stage\NativeMods\Streamline\STREAMLINE-LICENSE.txt"
+@"
+This folder is the NVIDIA Streamline runtime (DLSS Frame Generation) version 2.12.0,
+unmodified from NVIDIA's release package:
+
+  sl.interposer.dll, sl.common.dll, sl.dlss_g.dll, sl.pcl.dll, sl.reflex.dll,
+  nvngx_dlssg.dll, NvLowLatencyVk.dll
+
+Keep this folder exactly here, next to fgvk.dll:  bin\NativeMods\Streamline\
+fgvk.dll loads Streamline from this folder. Nothing from here needs to be copied anywhere else.
+
+To update Streamline later: download streamline-sdk-vX.Y.Z.zip from
+https://github.com/NVIDIA-RTX/Streamline/releases and replace all seven files with the ones
+from its bin\x64\ folder (not bin\x64\development\). Always replace all seven together.
+
+License: STREAMLINE-LICENSE.txt (NVIDIA Corporation).
+"@ | Set-Content -Encoding UTF8 "$stage\NativeMods\Streamline\README-STREAMLINE.txt"
+
+Copy-Item "$root\README.md" "$stage\README.md"
+Copy-Item "$root\LICENSE"   "$stage\LICENSE.txt"
 @"
 bg3fgvk $Version - DLSS Frame Generation for Baldur's Gate 3 (Vulkan)
 
-Extract the CONTENTS of this folder into the game's bin\ folder (where bg3.exe is):
-  bin\NativeMods\fgvk.dll, bin\NativeMods\fgvk-stack.exe   (needs Native Mod Loader)
-  bin\sl.*.dll, bin\nvngx_dlssg.dll, bin\NvLowLatencyVk.dll (NVIDIA Streamline runtime)
+INSTALL
+  1. Install "Native Mod Loader" for Baldur's Gate 3 (Nexus Mods). It creates bin\NativeMods\.
+  2. Extract the CONTENTS of this zip into the game's bin\ folder (where bg3.exe is).
+     If asked, merge the NativeMods folder. You end up with:
+        bin\NativeMods\fgvk.dll
+        bin\NativeMods\Streamline\   (NVIDIA Streamline runtime - keep it there, see its README)
+  3. In the game: Vulkan renderer, DLSS on (any quality or DLAA).
+     In Windows: Hardware-accelerated GPU scheduling ON.
 
-Requirements: RTX 40 (x2) or RTX 50 (x3/x4), Vulkan mode, DLSS enabled in-game,
-Hardware-accelerated GPU scheduling ON in Windows. Full guide: README.md
+Load a save. Frame generation starts by itself a couple of seconds into the world.
+Numpad * turns it off/on. Settings: bin\NativeMods\fgvk.ini (created on first launch).
+
+Requirements: RTX 40 (x2) or RTX 50 (x3/x4). Not compatible with PureDark's upscaler.dll.
+Full guide, configuration and troubleshooting: README.md
 "@ | Set-Content -Encoding UTF8 "$stage\INSTALL.txt"
 
 $zip = "$dist\bg3fgvk-$Version.zip"

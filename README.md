@@ -16,7 +16,8 @@ otherwise untouched.
 
 1. Install **Native Mod Loader** for Baldur's Gate 3 (Nexus Mods). It creates `bin\NativeMods\`.
 2. Download `bg3fgvk-vX.Y.Z.zip` from the Releases page and extract its contents into the game's
-   `bin\` folder (the one with `bg3.exe`). Merge the `NativeMods` folder when asked.
+   `bin\` folder (the one with `bg3.exe`). Merge the `NativeMods` folder when asked. That puts
+   `fgvk.dll` and a `Streamline` folder into `bin\NativeMods\`.
 3. In the game's Video settings make sure the renderer is **Vulkan** and **DLSS** is on (any
    quality, or DLAA). Windows must have **Hardware-accelerated GPU scheduling** on.
 
@@ -52,26 +53,12 @@ The release zip is laid out like the `bin` folder. Extract its **contents** stra
 (say yes to merging the `NativeMods` folder). You end up with:
 
 ```
-bin\NativeMods\fgvk.dll          the mod
-bin\NativeMods\fgvk-stack.exe    optional diagnostics helper, only runs if the game ever freezes
-bin\sl.interposer.dll            NVIDIA Streamline runtime (all seven from one Streamline release)
-bin\sl.common.dll
-bin\sl.dlss_g.dll
-bin\sl.pcl.dll
-bin\sl.reflex.dll
-bin\nvngx_dlssg.dll
-bin\NvLowLatencyVk.dll
-bin\README.md, INSTALL.txt, LICENSE.txt, STREAMLINE-LICENSE.txt
+bin\NativeMods\fgvk.dll                   the mod
+bin\NativeMods\Streamline\               NVIDIA Streamline runtime (7 files, see below)
+bin\README.md, INSTALL.txt, LICENSE.txt    docs (can be deleted)
 ```
 
-The seven `sl.*` / `nvngx_dlssg` / `NvLowLatencyVk` files are the DLSS Frame Generation runtime
-from NVIDIA's Streamline SDK 2.12.0, bundled unmodified. If another mod already put different
-versions of these files in `bin\`, replace them: all seven must come from one Streamline release.
-Leave the game's own `nvngx_dlss.dll` alone; it is not part of this.
-
-Want a newer Streamline than the bundled one? Download `streamline-sdk-vX.Y.Z.zip` from
-<https://github.com/NVIDIA-RTX/Streamline/releases> and copy the same seven files from its
-`bin\x64\` folder (not `bin\x64\development\`, those are debug builds) over the ones in `bin\`.
+That is the whole installation. Nothing needs to be copied next to `bg3.exe`.
 
 ### 3. First launch
 
@@ -85,12 +72,43 @@ DLSS. You do not need to do anything.
 To confirm it is working, open `bin\fgvk.log` and look for lines like:
 
 ```
+Streamline runtime: C:\...\bin\NativeMods\Streamline (loaded)
 gate: 60 consecutive DLSS-SR frames -> DLSS-G ON
 FG stats: 300 presents -> 1200 frames displayed (x4.00) status=0
 ```
 
 `x4.00` is Streamline's own count of displayed frames per rendered frame. If you see `x1.00`
 while playing, see Troubleshooting.
+
+---
+
+## The `Streamline` folder
+
+DLSS Frame Generation itself is NVIDIA code. It ships as the **Streamline SDK runtime**, seven
+files that bg3fgvk bundles unmodified (version 2.12.0) in `bin\NativeMods\Streamline\`:
+
+```
+sl.interposer.dll     Streamline core: takes over the Vulkan swapchain
+sl.common.dll         shared plugin infrastructure
+sl.dlss_g.dll         the DLSS Frame Generation plugin
+sl.pcl.dll            PC latency markers
+sl.reflex.dll         NVIDIA Reflex (required by frame generation)
+nvngx_dlssg.dll       the frame generation neural network
+NvLowLatencyVk.dll    Reflex helper for Vulkan
+STREAMLINE-LICENSE.txt, README-STREAMLINE.txt
+```
+
+- **Leave the folder where it is**, next to `fgvk.dll`. `fgvk.dll` loads Streamline from there
+  and tells it to look for its plugins there, so these files never conflict with copies another
+  mod may have dropped into `bin\`.
+- All seven must always come from the same Streamline release. Never mix files from two
+  versions.
+- **Updating Streamline:** download `streamline-sdk-vX.Y.Z.zip` from
+  <https://github.com/NVIDIA-RTX/Streamline/releases>, open its `bin\x64\` folder (not
+  `bin\x64\development\`, those are debug builds with an overlay) and replace all seven files
+  in `bin\NativeMods\Streamline\` with the new ones.
+- If the folder is missing, `fgvk.dll` falls back to looking for the same seven files next to
+  `bg3.exe` and says so in `fgvk.log`.
 
 ---
 
@@ -161,9 +179,9 @@ All diagnostics are in `bin\fgvk.log` (this mod) and `bin\sl.log` (Streamline's 
 - Hardware-accelerated GPU scheduling is off.
 
 **Black screen or freeze.**
-- The mod detects a stalled present loop and writes every thread's stack to `bin\fgvk-stacks.log`
-  (this is what `fgvk-stack.exe` is for). Attach `fgvk.log`, `sl.log` and `fgvk-stacks.log` to a
-  bug report.
+- Attach `bin\fgvk.log` and `bin\sl.log` to a bug report. (Developers: build `fgvk-stack.exe`
+  from this repo and put it next to `fgvk.dll`; the mod then dumps every thread's stack to
+  `bin\fgvk-stacks.log` when the present loop stalls.)
 - Another mod that hooks Vulkan (an overlay, a different frame generator) is the usual cause.
   Streamline's log will show `WaitSemaphores ... timed out` right before the stall.
 
@@ -202,9 +220,10 @@ cmake -S . -B build -A x64
 cmake --build build --config Release
 ```
 
-Output: `build\Release\fgvk.dll` and `build\Release\fgvk-stack.exe`. Copy both into
-`bin\NativeMods\`. `redist\` holds the seven Streamline runtime files that ship in the release
-zip; `package.ps1 -Version vX.Y.Z [-Build]` assembles `dist\bg3fgvk-vX.Y.Z.zip`.
+Output: `build\Release\fgvk.dll` (the mod) and `build\Release\fgvk-stack.exe` (developer
+diagnostics, not part of releases). Copy `fgvk.dll` into `bin\NativeMods\` and the seven files
+from `redist\` into `bin\NativeMods\Streamline\`. `package.ps1 -Version vX.Y.Z [-Build]`
+assembles `dist\bg3fgvk-vX.Y.Z.zip` in that layout.
 
 ---
 

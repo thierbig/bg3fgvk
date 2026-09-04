@@ -22,10 +22,10 @@ loads every DLL in `bin\NativeMods\` at startup.
 
 1. Copy `build\Release\fgvk.dll` to `C:\Games\Baldurs Gate 3\bin\NativeMods\fgvk.dll`
    (the game must not be running; keep the previous DLL as `fgvk.dll.bakX` for quick rollback).
-2. The Streamline/NGX runtime must be in `bin\` (already deployed; the set fgvk expects is
-   exactly Streamline 2.12.0): `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.pcl.dll`,
-   `sl.reflex.dll`, `nvngx_dlssg.dll`, `NvLowLatencyVk.dll` (sl.reflex's Vulkan helper - BG3
-   itself has no Reflex integration).
+   `fgvk-stack.exe` next to it enables the automatic stack dump on a stall (developer only).
+2. The Streamline runtime (exactly the seven files in `redist\`, Streamline 2.12.0) goes in
+   `bin\NativeMods\Streamline\`; fgvk loads the interposer from there and points Streamline's
+   plugin search at that folder. Fallback: the same seven files next to `bg3.exe`.
 3. Run WITHOUT PureDark's `upscaler.dll` (parked as `upscaler.dll.parked`).
 
 ## Logs

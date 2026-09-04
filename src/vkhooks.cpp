@@ -45,7 +45,9 @@ static void SpawnStackDump(const char* tag){
   GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)&SpawnStackDump,&self);
   GetModuleFileNameA(self, dll, MAX_PATH); char* s=strrchr(dll,'\\'); if(s) *(s+1)=0;
   char exe[MAX_PATH]{}; GetModuleFileNameA(nullptr, exe, MAX_PATH); s=strrchr(exe,'\\'); if(s) *(s+1)=0;
-  char cmd[1024]; snprintf(cmd,sizeof(cmd),"\"%sfgvk-stack.exe\" %lu \"%sfgvk-stacks.log\"", dll, GetCurrentProcessId(), exe);
+  char tool[MAX_PATH]; snprintf(tool,sizeof(tool),"%sfgvk-stack.exe", dll);
+  if(GetFileAttributesA(tool)==INVALID_FILE_ATTRIBUTES){ Log("wd: stack dump (%s) skipped - fgvk-stack.exe is not next to fgvk.dll (developer tool, see BUILD.md)", tag); return; }
+  char cmd[1024]; snprintf(cmd,sizeof(cmd),"\"%s\" %lu \"%sfgvk-stacks.log\"", tool, GetCurrentProcessId(), exe);
   STARTUPINFOA si{}; si.cb=sizeof(si); PROCESS_INFORMATION pi{};
   BOOL ok = CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
   Log("wd: stack dump (%s) -> %s%s", tag, ok?"spawned ":"CreateProcess failed ", ok?cmd:"");

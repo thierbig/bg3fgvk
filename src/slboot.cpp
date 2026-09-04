@@ -43,10 +43,27 @@ static bool EnsureSlInit(){
   if(s_tried) return s_armed;
   s_tried = true;
 
-  if(!g_sl){ g_sl = GetModuleHandleA("sl.interposer.dll");
-    if(!g_sl) g_sl = LoadLibraryA("sl.interposer.dll");
-    Log("sl.interposer handle=%p", (void*)g_sl); }
-  if(!g_sl){ Log("EnsureSlInit: sl.interposer.dll not loaded"); return false; }
+  // The Streamline runtime ships in a 'Streamline' folder next to fgvk.dll. Loading the
+  // interposer from there by full path makes Streamline search that folder for its plugins,
+  // nvngx_dlssg.dll and NvLowLatencyVk.dll (its default plugin path is the interposer's own
+  // directory; we also pass it explicitly). Fallback: the seven files next to bg3.exe.
+  static wchar_t s_slDir[MAX_PATH]{};
+  if(!g_sl){
+    g_sl = GetModuleHandleA("sl.interposer.dll");
+    if(g_sl){ Log("sl.interposer already loaded by someone else (%p) - reusing it", (void*)g_sl); }
+    else {
+      HMODULE self{}; GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCWSTR)&EnsureSlInit,&self);
+      wchar_t dir[MAX_PATH]{}; GetModuleFileNameW(self, dir, MAX_PATH); wchar_t* s=wcsrchr(dir,L'\\'); if(s) *(s+1)=0;
+      wchar_t interposer[MAX_PATH]; swprintf(interposer, MAX_PATH, L"%sStreamline\\sl.interposer.dll", dir);
+      if(GetFileAttributesW(interposer)!=INVALID_FILE_ATTRIBUTES){
+        swprintf(s_slDir, MAX_PATH, L"%sStreamline", dir);
+        g_sl = LoadLibraryW(interposer);
+        Log("Streamline runtime: %S (%s)", s_slDir, g_sl?"loaded":"LOAD FAILED");
+      }
+      if(!g_sl){ s_slDir[0]=0; g_sl = LoadLibraryA("sl.interposer.dll"); Log("Streamline runtime: next to bg3.exe (%s)", g_sl?"loaded":"NOT FOUND"); }
+    }
+  }
+  if(!g_sl){ Log("EnsureSlInit: sl.interposer.dll not found - put the Streamline folder next to fgvk.dll"); return false; }
 
   p_slInit = (PFun_slInit*)GetProcAddress(g_sl, "slInit");
   p_slSetVulkanInfo = (PFun_slSetVulkanInfo*)GetProcAddress(g_sl, "slSetVulkanInfo");
@@ -80,8 +97,12 @@ static bool EnsureSlInit(){
   // Streamline's own verbose log - written next to the game exe; names the exact
   // internal step DLSS-G is on when something wedges.
   p.logLevel = sl::LogLevel::eVerbose;
-  static const wchar_t* kLogPath = L"C:\\Games\\Baldurs Gate 3\\bin";
-  p.pathToLogsAndData = kLogPath;
+  // sl.log next to bg3.exe (wherever the game is installed)
+  static wchar_t s_logDir[MAX_PATH]{};
+  { GetModuleFileNameW(nullptr, s_logDir, MAX_PATH); wchar_t* s=wcsrchr(s_logDir,L'\\'); if(s) *s=0; }
+  p.pathToLogsAndData = s_logDir;
+  static const wchar_t* s_pluginPaths[1];
+  if(s_slDir[0]){ s_pluginPaths[0] = s_slDir; p.pathsToPlugins = s_pluginPaths; p.numPathsToPlugins = 1; }
 
   sl::Result r = p_slInit(p, sl::kSDKVersion);
   Log("slInit -> %d", (int)r);
