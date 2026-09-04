@@ -17,11 +17,10 @@ static bool Pressed(int vk, bool& was){
   bool edge = down && !was; was = down; return edge;
 }
 bool PollHotkeys(){
-  static bool wT=false, wC=false, wH=false;
+  static bool wT=false, wC=false;
   bool changed=false;
   if(Pressed(g_cfg.keyToggleFG, wT)){ g_rt.fgUserOff = !g_rt.fgUserOff; Log("hotkey: DLSS-G %s by user", g_rt.fgUserOff?"OFF":"ON"); changed=true; }
   if(Pressed(g_cfg.keyCycleFrames, wC)){ g_rt.frames = g_rt.frames>=3 ? 1 : g_rt.frames+1; Log("hotkey: generated frames -> %u (x%u)", g_rt.frames, g_rt.frames+1); changed=true; }
-  if(Pressed(g_cfg.keyToggleHudless, wH)){ g_rt.tagHudless = !g_rt.tagHudless; Log("hotkey: HUD-less tag %s", g_rt.tagHudless?"ON":"OFF"); changed=true; }
   return changed;
 }
 
@@ -52,10 +51,9 @@ static void WriteDefaults(const char* path){
     "OnAfterEvalFrames=60\n"
     "; ...and suspends after this many presents without one (menu / loading screen / video)\n"
     "OffAfterIdleFrames=30\n"
-    "; Hotkeys as Windows virtual-key codes (decimal or 0x hex; 0 disables). 106 = numpad *, 35 = End, 36 = Home\n"
+    "; Hotkeys as Windows virtual-key codes (decimal or 0x hex; 0 disables). 106 = numpad *, 35 = End\n"
     "KeyToggleFG=0x6A\n"
-    "KeyCycleFrames=0x23\n"
-    "KeyToggleHUDLess=0x24\n", f);
+    "KeyCycleFrames=0x23\n", f);
   fclose(f);
 }
 
@@ -77,11 +75,10 @@ void LoadConfig(){
   auto key=[&](const char* k, int def){ GetPrivateProfileStringA("fgvk",k,"",kb,sizeof(kb),path); if(!kb[0]) return def; return (int)strtol(kb,nullptr,0); };
   c.keyToggleFG = key("KeyToggleFG", c.keyToggleFG);
   c.keyCycleFrames = key("KeyCycleFrames", c.keyCycleFrames);
-  c.keyToggleHudless = key("KeyToggleHUDLess", c.keyToggleHudless);
   g_cfg=c;
-  g_rt.frames = c.dlssgFrames; g_rt.tagHudless = c.tagHudless; g_rt.fgUserOff = false;
-  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x hudless=0x%x",
+  g_rt.frames = c.dlssgFrames; g_rt.fgUserOff = false;
+  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x",
       path, c.dlssgFrames, c.dlssgFrames+1, c.reflexMode, (int)c.reflexSleep, (int)c.tagHudless, (int)c.tagUI, c.onAfterEvalFrames, c.offAfterIdleFrames,
-      c.keyToggleFG, c.keyCycleFrames, c.keyToggleHudless);
+      c.keyToggleFG, c.keyCycleFrames);
 }
 }

@@ -52,7 +52,6 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
 | `KeyToggleFG` | 0x6A (numpad *) | hotkey: DLSS-G on/off |
 | `KeyCycleFrames` | 0x23 (End) | hotkey: cycle x2 / x3 / x4 |
-| `KeyToggleHUDLess` | 0x24 (Home) | hotkey: HUD-less tag on/off (live A/B) |
 
 ## Script Extender coexistence
 

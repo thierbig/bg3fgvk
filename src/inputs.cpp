@@ -316,7 +316,7 @@ static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view
   if(!fns.setTagForFrame || !g_lastToken) return;
   if(!g_logHudTag){ g_logHudTag=true;
     Log("DLSS-SR output %ux%u fmt=%d; optional tags: HUDLess=%d UI=%d", w, h, (int)fmt, (int)Cfg().tagHudless, (int)Cfg().tagUI); }
-  if(!Rt().tagHudless && !Cfg().tagUI) return;
+  if(!Cfg().tagHudless && !Cfg().tagUI) return;
   sl::Resource colorRes(sl::ResourceType::eTex2d,(void*)image,(void*)nullptr,
       (void*)view,(uint32_t)VK_IMAGE_LAYOUT_GENERAL);   // NGX writes Output as compute storage
   DescribeResource(colorRes,w,h,fmt,
@@ -328,7 +328,7 @@ static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view
   DescribeResource(uiRes,w,h,VK_FORMAT_R8G8B8A8_UNORM,
       VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
   sl::ResourceTag tags[2]; uint32_t n=0;
-  if(Rt().tagHudless) tags[n++] = sl::ResourceTag(&colorRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent);
+  if(Cfg().tagHudless) tags[n++] = sl::ResourceTag(&colorRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent);
   if(haveUI)           tags[n++] = sl::ResourceTag(&uiRes, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &extent);
   if(!n) return;
   sl::ViewportHandle vp{0};
