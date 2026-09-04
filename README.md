@@ -1,0 +1,223 @@
+# bg3fgvk
+
+Free, open-source **DLSS Frame Generation (x2 / x3 / x4) for Baldur's Gate 3** on Vulkan.
+
+bg3fgvk is a small DLL that plugs NVIDIA Streamline's DLSS-G into the game's Vulkan swapchain.
+The game's own DLSS Super Resolution provides depth and motion vectors; the NVIDIA driver
+generates and paces the extra frames. There is no upscaler replacement, no menu of its own, and
+no account or key. It coexists with the **Baldur's Gate 3 Script Extender** and mods that draw
+their UI through it (Mod Configuration Menu included).
+
+Measured on an RTX 50-series card at 2560x1440 with DLSS Quality: a 30 to 35 fps scene shows at
+roughly 120 to 140 fps with x4 (Streamline itself reports the multiplier), with the GPU
+otherwise untouched.
+
+---
+
+## Requirements
+
+| | |
+|---|---|
+| GPU | NVIDIA RTX 40 series for x2. RTX 50 series for x3 and x4 (multi frame generation). |
+| Driver | A current GeForce driver. The bundled Streamline 2.12 runtime was validated on 610.xx. |
+| Windows | Windows 10 20H1 (build 19041) or newer. **Hardware-accelerated GPU scheduling must be ON** (Settings, System, Display, Graphics, Default graphics settings). DLSS-G refuses to run without it. |
+| Game | Baldur's Gate 3 in **Vulkan** mode (the default `bg3.exe`, not DirectX 11). |
+| In-game | **DLSS must be enabled** in Video settings (any quality level, or DLAA). Frame generation reads the game's DLSS inputs; with DLSS off it stays idle. |
+| Loader | **Native Mod Loader** for Baldur's Gate 3 (on Nexus Mods; the `bink2w64.dll` replacement). It loads every DLL in `bin\NativeMods\`. |
+
+Not compatible with PureDark's `upscaler.dll` frame generation mod. Remove or park it before
+installing this one; two frame generators cannot share the swapchain.
+
+---
+
+## Installation
+
+Everything goes into the game's `bin` folder, normally
+`C:\Program Files (x86)\Steam\steamapps\common\Baldurs Gate 3\bin` (or wherever `bg3.exe` is).
+
+### 1. Native Mod Loader
+
+Install Native Mod Loader if you do not have it. After that `bin\NativeMods\` exists
+(create it if it does not).
+
+### 2. bg3fgvk
+
+Copy from the release zip into `bin\NativeMods\`:
+
+```
+fgvk.dll          the mod
+fgvk-stack.exe    optional: diagnostics helper, only runs if the game ever freezes
+```
+
+### 3. NVIDIA Streamline runtime
+
+DLSS Frame Generation is NVIDIA code that ships in the Streamline SDK. Download
+**`streamline-sdk-v2.12.0.zip`** from the official release page
+<https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0>, open it, and copy these seven
+files from its `bin\x64\` folder **directly into `bin\`** (next to `bg3.exe`, not into
+`NativeMods`):
+
+```
+sl.interposer.dll
+sl.common.dll
+sl.dlss_g.dll
+sl.pcl.dll
+sl.reflex.dll
+nvngx_dlssg.dll
+NvLowLatencyVk.dll
+```
+
+Take them from `bin\x64\` itself, **not** from `bin\x64\development\` (those are debug builds
+with an on-screen overlay). All seven must come from the same Streamline version; do not mix them
+with copies from another mod. A newer release zip than 2.12.0 is fine as long as all seven come
+from the same zip.
+
+Leave the game's own `nvngx_dlss.dll` alone; it is not part of this.
+
+### 4. First launch
+
+Start the game, load a save, and play for a few seconds. On first launch the mod writes its
+config file `bin\NativeMods\fgvk.ini` with defaults and a log `bin\fgvk.log`.
+
+Frame generation turns itself on about two seconds after the 3D world starts rendering and
+suspends itself on loading screens, videos, and full-screen menus where the game does not run
+DLSS. You do not need to do anything.
+
+To confirm it is working, open `bin\fgvk.log` and look for lines like:
+
+```
+gate: 60 consecutive DLSS-SR frames -> DLSS-G ON
+FG stats: 300 presents -> 1200 frames displayed (x4.00) status=0
+```
+
+`x4.00` is Streamline's own count of displayed frames per rendered frame. If you see `x1.00`
+while playing, see Troubleshooting.
+
+---
+
+## Configuration: `bin\NativeMods\fgvk.ini`
+
+Read once at game start.
+
+| Key | Default | What it does |
+|---|---|---|
+| `DLSSGFrames` | `3` | Generated frames per rendered frame. `1` = x2, `2` = x3, `3` = x4. Clamped to what the GPU supports (RTX 40 = 1). |
+| `ReflexMode` | `2` | NVIDIA Reflex, which DLSS-G requires. `1` = Low Latency, `2` = Low Latency + Boost. `0` = off (frame generation will not activate). |
+| `ReflexSleep` | `1` | Keep at `1`. |
+| `TagHUDLess` | `1` | Feeds the game's pre-UI image to DLSS-G so the HUD does not smear over a moving background. Keep at `1`; `0` is only for comparison. |
+| `TagUI` | `0` | Experimental transparent UI layer. Leave at `0`. |
+| `OnAfterEvalFrames` | `60` | Frames of 3D rendering before frame generation switches on. |
+| `OffAfterIdleFrames` | `30` | Frames without 3D rendering (menus, loading) before it suspends. |
+| `KeyToggleFG` | `0x6A` | Hotkey: frame generation on/off. `0x6A` is numpad `*`. `0` disables the hotkey. |
+| `KeyCycleFrames` | `0x23` | Hotkey: cycle x2, x3, x4. `0x23` is `End`. |
+
+Hotkeys use Windows virtual-key codes, decimal or hex.
+
+### The NVIDIA App can override the multiplier
+
+If you have a per-game **DLSS Override, Frame Generation** setting for Baldur's Gate 3 in the
+NVIDIA App (for example "4x"), the driver applies it on top of this mod and the `DLSSGFrames`
+setting and the `End` hotkey will appear to do nothing. Set that override to
+"Use 3D application setting" if you want the mod to control the multiplier. The mod works
+either way.
+
+---
+
+## Hotkeys
+
+| Key | Action |
+|---|---|
+| Numpad `*` | Frame generation on / off |
+| `End` | Cycle x2, x3, x4 (see the NVIDIA App note above) |
+
+---
+
+## What to expect
+
+- The displayed frame rate is roughly 4x, 3x or 2x the rendered one. Use an external counter
+  such as the NVIDIA App overlay; the game's own FPS display cannot see generated frames.
+- Generated frames add a little input latency compared to no frame generation. Reflex Boost
+  keeps it in check. A rendered frame rate of 30 fps or more is where x4 looks good; below that,
+  x2 or x3 is the better trade.
+- Frame generation pauses when the game window loses focus, on loading screens, and in videos.
+  It resumes on its own.
+- Very fast camera pans can show light smearing. That is a property of the technique at this
+  frame rate, not a bug.
+
+---
+
+## Troubleshooting
+
+All diagnostics are in `bin\fgvk.log` (this mod) and `bin\sl.log` (Streamline's own verbose log).
+
+**`FG stats` shows `x1.00` while playing.**
+- Check the `gate:` lines. If DLSS-G never turned ON, the game is not running DLSS: enable DLSS
+  in Video settings.
+- Check the `DLSSG status=` line: `status=0` is good. `status=2` means Reflex is off (set
+  `ReflexMode` to 1 or 2). `status=1` means the resolution is too low.
+- The window must have focus.
+
+**The game does not start, or `fgvk.log` stops after `slInit`.**
+- The seven Streamline files are missing from `bin\` or mixed from different versions.
+- Hardware-accelerated GPU scheduling is off.
+
+**Black screen or freeze.**
+- The mod detects a stalled present loop and writes every thread's stack to `bin\fgvk-stacks.log`
+  (this is what `fgvk-stack.exe` is for). Attach `fgvk.log`, `sl.log` and `fgvk-stacks.log` to a
+  bug report.
+- Another mod that hooks Vulkan (an overlay, a different frame generator) is the usual cause.
+  Streamline's log will show `WaitSemaphores ... timed out` right before the stall.
+
+**Script Extender mods stop drawing their UI.**
+- Not expected: bg3fgvk routes the Vulkan functions the Script Extender hooks so its overlay
+  lands on the frames the game actually presents. If it happens, report it with the logs.
+
+---
+
+## How it works (short version)
+
+1. `fgvk.dll` is loaded by Native Mod Loader at startup and hooks `vkGetInstanceProcAddr`. The
+   game builds its entire Vulkan dispatch through NVIDIA's `sl.interposer.dll`, so Streamline
+   owns the device, the queues and the swapchain exactly as in a native integration.
+2. It hooks the NGX call the game makes for DLSS Super Resolution and reads the depth buffer,
+   motion vectors, jitter and the upscaled pre-UI image out of it. Those are tagged for DLSS-G
+   every frame together with the camera constants.
+3. Streamline's DLSS-G plugin generates the intermediate frames and paces their presentation
+   in the driver. The mod's present hook only carries the Reflex/PCL frame markers and decides
+   when frame generation should be on (3D world rendering) or suspended (menus, loading).
+4. The exported `vkGetDeviceProcAddr` and swapchain functions of `vulkan-1.dll` are routed
+   through the same view the game gets, so other mods that hook Vulkan (the Script Extender's
+   ImGui overlay) see the presented frames and never run on Streamline's internal threads.
+
+Details for developers are in `BUILD.md` and `docs/`.
+
+---
+
+## Building from source
+
+Visual Studio 2022 with C++ and CMake. The Vulkan headers and Microsoft Detours are expected
+where `CMakeLists.txt` points (`External/` of a sibling checkout, see `BUILD.md`).
+
+```
+cmake -S . -B build -A x64
+cmake --build build --config Release
+```
+
+Output: `build\Release\fgvk.dll` and `build\Release\fgvk-stack.exe`. Copy both into
+`bin\NativeMods\`.
+
+---
+
+## Credits and licenses
+
+- bg3fgvk is released under the MIT License (see `LICENSE`).
+- NVIDIA Streamline SDK (`sl.*.dll`, headers) is MIT licensed by NVIDIA. The DLSS Frame
+  Generation plugin (`nvngx_dlssg.dll`) and `NvLowLatencyVk.dll` are NVIDIA binaries
+  distributed under the terms in the Streamline release package. That is why you download them
+  from NVIDIA's release page rather than from here.
+- Microsoft Detours (MIT) for the hooks.
+- Norbyte's Baldur's Gate 3 Script Extender, which this mod is built to coexist with.
+- PureDark's frame generation mod for Baldur's Gate 3, whose DLSS-G input recipe served as the
+  reference for what the game's buffers look like.
+
+This is a fan-made mod. It is not affiliated with Larian Studios or NVIDIA.
