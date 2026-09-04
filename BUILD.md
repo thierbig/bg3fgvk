@@ -17,30 +17,25 @@ cmake --build C:/Dev/fgvk/build --config Release
 
 ## Deploy
 
-Copy the built DLL and Streamline runtime to the game directory:
+The DLL is loaded by **Native Mod Loader** (the `bink2w64.dll` replacement in `bin\`), which
+loads every DLL in `bin\NativeMods\` at startup.
 
-1. Copy `fgvk.dll` to `C:\Games\Baldurs Gate 3\bin\`
-2. Copy all Streamline/NGX DLLs from `C:\Games\Baldurs Gate 3\bin\mods\UpscalerBasePlugin\Streamline\` to `C:\Games\Baldurs Gate 3\bin\`:
-   - `sl.interposer.dll`
-   - `sl.common.dll`
-   - `sl.dlss_g.dll`
-   - `sl.pcl.dll`
-   - `sl.reflex.dll`
-   - `nvngx_dlssg.dll`
-   
-   *(Copy the entire Streamline folder's DLLs to be safe.)*
+1. Copy `build\Release\fgvk.dll` to `C:\Games\Baldurs Gate 3\bin\NativeMods\fgvk.dll`
+   (the game must not be running; keep the previous DLL as `fgvk.dll.bakX` for quick rollback).
+2. The Streamline/NGX runtime must be in `bin\` (already deployed; the set fgvk expects is
+   exactly Streamline 2.12.0): `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.pcl.dll`,
+   `sl.reflex.dll`, `nvngx_dlssg.dll`, `NvLowLatencyVk.dll` (sl.reflex's Vulkan helper - BG3
+   itself has no Reflex integration).
+3. Run WITHOUT PureDark's `upscaler.dll` (parked as `upscaler.dll.parked`).
 
-## Load fgvk.dll into the game
+## Logs
 
-**Options** (choose one):
-
-- **Manual injector**: Use a manual DLL injector to load `fgvk.dll` after the game launches.
-- **BG3SE hook** (advanced): Temporarily add a `LoadLibraryW(L"fgvk.dll")` call in the BG3SE compat build's hook init (it already handles `upscaler.dll` this way).
-
-## Important for the spike
-
-- **Run WITHOUT PureDark's `upscaler.dll` active.** Only ONE thing should route the swapchain through Streamline to isolate arming behavior.
-- **Initially run WITHOUT BG3SE.** Isolate arming first, then test BG3SE coexistence in M5.
+- `bin\fgvk.log` - ours. Every line: wall clock + seconds since DllMain. Key lines: `gate:`
+  (DLSS-G on/suspended and why), `FG stats:` (real multiplier over 300 presents; ~x4 = MFG
+  working, x1 = nothing generated), `DLSSG status=`, `TIMING:`, `wd:` (watchdog; `STALLED`
+  with `pos=` names where the present thread is stuck).
+- `bin\sl.log` - Streamline verbose. Fatal signature so far: `waitCPUFence ... WaitSemaphores
+  ... timed out` (500 ms cap) followed by a black screen and freeze.
 
 ## Verify arming
 

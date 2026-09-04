@@ -18,8 +18,8 @@ uint32_t gGraphicsFamily{};
 // watchdog: counters + a position marker naming the in-flight call (inputs.cpp writes g_wdEvals/g_wdPos)
 std::atomic<uint32_t> g_wdPresents{0};
 std::atomic<uint32_t> g_wdEvals{0};
-std::atomic<int> g_wdPos{0};   // 0 idle; 1 present-enter; 2 pre-proxy-present; 10/11/12 eval stages
-static inline double NowMsVk(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return 1000.0*(double)c.QuadPart/(double)f.QuadPart; }
+std::atomic<int> g_wdPos{0};   // 0 idle; 1 present-enter; 2 inside proxy present; 3 post-present markers/Reflex sleep; 10/11/12 eval stages
+static std::atomic<bool> g_genOn{false};   // DLSS-G currently requested on (gate state)
 static void StartWatchdog(){
   static std::atomic<bool> started{false};
   bool exp=false; if(!started.compare_exchange_strong(exp,true)) return;
@@ -28,9 +28,40 @@ static void StartWatchdog(){
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
       if(p!=lastP && pos==0){ lastP=p; continue; }
-      Log("wd: presents=%u evals=%u pos=%d%s", p,e,pos,(p==lastP)?" STALLED":"");
+      Log("wd: presents=%u evals=%u pos=%d gen=%d%s", p,e,pos,(int)g_genOn.load(),(p==lastP)?" STALLED":"");
       lastP=p; }
   }).detach();
+}
+
+// DLSS-G gate: driven by whether the game's DLSS-SR evaluated this frame (= the 3D world is
+// rendering), NEVER by frame time. The previous frame-time gate manufactured a full FG
+// release + re-create at every in-world streaming burst; both fatal WaitSemaphores timeouts
+// (19:51 and 21:23 runs) sit inside that cycle, and PureDark rides through the same hitches
+// with FG left on. Menus, loading screens and videos run no DLSS-SR, so "no eval for a while"
+// is the guide's own "turn FG off when not rendering game frames" signal (17.0) - and with
+// eRetainResourcesWhenOff those transitions free nothing. Loading screens also call
+// vkDeviceWaitIdle from a loader thread (sl.log tid 540); with FG suspended there that flush
+// meets an idle pacer.
+static uint32_t g_evalStreak = 0, g_idleStreak = 0;
+static const uint32_t kOnAfterEvalFrames = 60;   // ~2s of world rendering before enabling
+static const uint32_t kOffAfterIdleFrames = 30;  // ~0.5-1s of presents without DLSS-SR before suspending
+static void EvalGate(bool evalThisFrame){
+  if(evalThisFrame){
+    g_idleStreak = 0;
+    if(g_evalStreak < 100000) g_evalStreak++;
+    if(!g_genOn.load() && g_evalStreak >= kOnAfterEvalFrames){
+      g_genOn.store(true); Log("gate: %u consecutive DLSS-SR frames -> DLSS-G ON", g_evalStreak); SetDLSSGeneration(true); }
+  } else {
+    g_evalStreak = 0;
+    if(g_idleStreak < 100000) g_idleStreak++;
+    if(g_genOn.load() && g_idleStreak >= kOffAfterIdleFrames){
+      g_genOn.store(false); Log("gate: %u presents without DLSS-SR (menu/loading/video) -> DLSS-G suspended (resources retained)", g_idleStreak); SetDLSSGeneration(false); }
+  }
+}
+// Guide 17.0: DLSS-G off before any swap-chain manipulation "to avoid potential deadlocks".
+static void GateOffForSwapchain(){
+  g_evalStreak = 0; g_idleStreak = 0;
+  if(g_genOn.load()){ g_genOn.store(false); Log("gate: swapchain re-create -> DLSS-G suspended first"); SetDLSSGeneration(false); }
 }
 
 // The game's own vkGetInstanceProcAddr (real loader), captured at hook install.
@@ -92,8 +123,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     gPhysicalDevice = pd; gDevice = *out;
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){ gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
     Log("w_CreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
-    { Reentry _; OnDeviceCreated(); }   // slboot: Reflex + slDLSSGSetOptions (SL calls -> guard)
-    StartWatchdog();   // drives NgxProbeTick + PollDLSSGState (present is no longer wrapped)
+    { Reentry _; OnDeviceCreated(); }   // slboot: Reflex options (DLSS-G itself waits for the gate)
+    StartWatchdog();
   }
   return r;
 }
@@ -109,59 +140,24 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
     Log("w_CreateSwapchainKHR %ux%u fmt=%d mode=%d minImg=%u (game's own)",
         ci->imageExtent.width, ci->imageExtent.height, (int)ci->imageFormat,
         (int)ci->presentMode, ci->minImageCount); }
+  GateOffForSwapchain();
   VkResult r; { Reentry _; r = t_CreateSwapchainKHR(dev, ci, a, out); }
   static bool l2=false; if(!l2){ l2=true; Log("w_CreateSwapchainKHR -> %d sc=%p", (int)r, out?(void*)*out:nullptr); }
   return r;
 }
 
-// Our PCL markers + slReflexSleep are OFF by default: BG3 drives Reflex natively via
-// NvLowLatencyVk, and double-driving it gives the DLSS-G pacer conflicting frame markers
-// (observed: pacer cadence collapses, acquireNextBuffer times out, present loop stalls).
-// Flip to true only if generation stops without our markers (i.e. native Reflex isn't enough).
-static const bool kEmitOurMarkers = true;   // markers REQUIRED for constants; slReflexSleep dropped inside
-
-// Stability gate: enable DLSS-G only after the frame rate has been smooth for a sustained
-// window (in-world), and turn it off the moment it goes hitchy (loading/streaming). This is
-// the automatic version of the alt-tab trick the user found: DLSS-G active during the load's
-// >100ms frames freezes the game.
-static double g_lastPresentMs = 0.0;
-static uint32_t g_goodStreak = 0;
-static uint32_t g_hitchStreak = 0;
-static bool g_genOn = false;
-static const uint32_t kEnableAfter = 150;   // ~5s smooth at 30fps before turning DLSS-G on
-static const double   kGoodMs   = 55.0;      // a frame under 55ms counts as smooth
-static const double   kHitchMs  = 80.0;      // a frame over 80ms is a hitch
-static const uint32_t kHitchRun = 6;         // only a RUN of consecutive hitches (a loading/
-                                             // streaming burst) closes the gate - NOT a one-off
-                                             // gameplay hitch. Prevents enable/disable churn.
-static void StabilityGate(){
-  double now = NowMsVk();
-  double dt = (g_lastPresentMs>0.0) ? (now - g_lastPresentMs) : 16.0;
-  g_lastPresentMs = now;
-  if(dt <= kGoodMs){
-    g_hitchStreak = 0;
-    if(g_goodStreak < 100000) g_goodStreak++;
-    if(!g_genOn && g_goodStreak >= kEnableAfter){ g_genOn=true; Log("stability gate: %u smooth frames -> ENABLE DLSS-G", g_goodStreak); SetDLSSGeneration(true); }
-  } else {
-    if(dt >= kHitchMs) g_hitchStreak++;
-    // a sustained burst (world-load / area stream) resets the smooth streak and closes the gate;
-    // isolated gameplay hitches are tolerated (DLSS-G stays on, no churn).
-    if(g_hitchStreak >= kHitchRun){
-      g_goodStreak = 0;
-      if(g_genOn){ g_genOn=false; Log("stability gate: %u-hitch burst (last %.0fms) -> DISABLE DLSS-G (loading/stream)", g_hitchStreak, dt); SetDLSSGeneration(false); }
-    }
-  }
-}
-
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
   g_wdPresents.fetch_add(1); g_wdPos.store(1);
-  NgxProbeTick();      // cheap after hooked (one bool)
-  StabilityGate();     // enable/disable DLSS-G based on frame smoothness (present thread)
-  PollDLSSGState();    // slDLSSGGetState ON THE PRESENT THREAD - fence sync (SL requires this)
-  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p (stability-gated)", (void*)q); }
+  NgxProbeTick();                  // cheap after hooked (one bool)
+  EvalGate(ConsumeEvalSeen());     // slDLSSGSetOptions on the present thread, before this present (guide 6.0)
+  PresentMarkersBegin();           // RenderSubmitEnd + PresentStart with this frame's token (present thread)
+  PollDLSSGState();                // slDLSSGGetState on the present thread: status + generated-frame stats
+  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p tid=%lu (eval-driven gate)", (void*)q, (unsigned long)GetCurrentThreadId()); }
   g_wdPos.store(2);
   VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
+  g_wdPos.store(3);
+  PresentMarkersEnd();             // PresentEnd, then next frame: new token + Reflex sleep + SimulationStart
   g_wdPos.store(0);
   return r;
 }

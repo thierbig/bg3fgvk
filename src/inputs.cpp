@@ -66,8 +66,46 @@ struct FrameInputs {
 };
 static FrameInputs g_in;
 static inline double NowMs(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return 1000.0*(double)c.QuadPart/(double)f.QuadPart; }
-static double g_maxTagMs=0, g_maxConstMs=0, g_maxHudMs=0, g_lastEvalMs=0, g_maxGapMs=0; static uint32_t g_evalN=0;
+static double g_maxTagMs=0, g_maxConstMs=0, g_maxHudMs=0, g_lastEvalMs=0, g_maxGapMs=0, g_maxSleepMs=0; static uint32_t g_evalN=0;
 static sl::FrameToken* g_lastToken=nullptr;
+
+// ---- frame token lifecycle ------------------------------------------------------------
+// ONE token per frame, shared by the marker ladder, the tags and the constants. Verified in
+// the SL 2.12 source: slGetNewFrameToken(nullptr) advances a global counter on EVERY call, and
+// sl.reflex publishes the ePresentStart marker's index as latency.markerPresentFrame - the
+// index DLSS-G uses at present time to look up that frame's tags+constants (sl.common's
+// frame-based tag store has no fallback). The old "+1 shift" dates from calling the token
+// function twice per frame; with one call it made every present consume the PREVIOUS frame's
+// inputs (sl.log: "Unable to find 'common' constants for frame 1 ... using last set for frame 2").
+static std::atomic<sl::FrameToken*> g_frameToken{nullptr};
+static std::atomic<bool> g_evalSeen{false};     // DLSS-SR filed tags+constants since the last present
+static bool g_midMarkers=false;                  // SimulationEnd+RenderSubmitStart emitted for this token
+static bool g_submitted=false;                   // tags+constants filed for this token
+static std::atomic<uint32_t> g_evalTid{0};
+// Reflex sleep is REQUIRED by the Reflex checklist regardless of mode; it was dropped earlier on
+// the (wrong) belief that BG3 drives Reflex natively - bg3.exe has no Reflex integration at all.
+// One-line kill switch if the driver's pacing misbehaves.
+static const bool kReflexSleep = true;
+
+// Start the next frame: new token, Reflex sleep, SimulationStart (NVIDIA's sample ladder).
+static sl::FrameToken* BeginFrame(){
+  auto& fns = GetSlFns();
+  sl::FrameToken* t=nullptr;
+  if(!fns.getNewFrameToken || fns.getNewFrameToken(t,nullptr)!=sl::Result::eOk || !t) return nullptr;
+  g_frameToken.store(t); g_midMarkers=false; g_submitted=false;
+  if(kReflexSleep && fns.reflexSleep){ double t0=NowMs(); fns.reflexSleep(*t); double d=NowMs()-t0; if(d>g_maxSleepMs) g_maxSleepMs=d; }
+  if(fns.pclSetMarker) fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*t);
+  return t;
+}
+static sl::FrameToken* CurrentFrame(){ sl::FrameToken* t=g_frameToken.load(); return t ? t : BeginFrame(); }
+// SimulationEnd + RenderSubmitStart: at the DLSS-SR evaluate when there is one (mid render
+// submit), otherwise just before present so the ladder stays complete and ordered.
+static void MidFrameMarkers(sl::FrameToken* t){
+  if(g_midMarkers || !t) return; g_midMarkers=true;
+  auto& fns = GetSlFns(); if(!fns.pclSetMarker) return;
+  fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*t);
+  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*t);
+}
 
 // UIColorAndAlpha transparent image (session lifetime)
 static VkImage g_uiImage{}; static VkDeviceMemory g_uiMem{}; static VkImageView g_uiView{};
@@ -189,27 +227,18 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   auto& fns = GetSlFns();
   if(!fns.getNewFrameToken || !fns.setTagForFrame || !fns.setConstants) return false;
 
-  sl::FrameToken* token=nullptr;
-  if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return false;
-  // PCL markers HERE (NGX-eval thread), NOT on the present thread: emitting them on the
-  // present thread takes sl.common/sl.pcl locks that the DLSS-G pacer's sync-present needs,
-  // causing 'Couldn't lock the mutex on sync present' -> pacer WaitSemaphores deadlock.
-  // Emit with the CURRENT (unshifted) token, roughly bracketing the frame we're evaluating.
-  if(fns.pclSetMarker){
-    fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*token);
-    fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*token);
-    fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
-    fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*token);
-    fns.pclSetMarker(sl::PCLMarker::ePresentStart,*token);
-    fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*token);
+  sl::FrameToken* token = CurrentFrame();
+  if(!token) return false;
+  g_evalTid.store((uint32_t)GetCurrentThreadId());
+  if(g_submitted){
+    // SL forbids different constants twice under one frame; keep the first (main scene) set.
+    static bool l=false; if(!l){ l=true; Log("second DLSS-SR evaluate within one frame - ignored"); }
+    return false;
   }
-  // +1 shift: sl.common's before-present hook pre-increments the frame counter before
-  // sl.dlss_g's lookups; submissions under the unshifted index are invisible to the
-  // consuming present ("missing common constants" every frame, observed live).
-  uint32_t presentIndex = ((uint32_t)*token) + 1;
-  if(fns.getNewFrameToken(token,&presentIndex)!=sl::Result::eOk || !token) return false;
+  MidFrameMarkers(token);   // SimulationEnd + RenderSubmitStart (we are inside the render submit)
   if(!g_logTokenShift){ g_logTokenShift=true;
-    Log("FG frame token: SL current=%u, submitting under %u", presentIndex-1, presentIndex); }
+    Log("FG frame token %u: tags+constants+present markers share one token per frame (no +1 shift) evalTid=%lu",
+        (uint32_t)*token, (unsigned long)GetCurrentThreadId()); }
   g_lastToken=token;
 
   sl::ViewportHandle vp{0};
@@ -260,9 +289,11 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
     g_logSubmitOk=true; Log("FG inputs submitted ok (depth %ux%u, mvec %ux%u, jitter %.4f/%.4f mvScale %.1f/%.1f)",
       g_in.depthW,g_in.depthH,g_in.mvecW,g_in.mvecH,g_in.jitterX,g_in.jitterY,g_in.mvScaleX,g_in.mvScaleY); }
   double _now=NowMs(); double _gap=_now-g_lastEvalMs; if(g_lastEvalMs>0 && _gap>g_maxGapMs) g_maxGapMs=_gap; g_lastEvalMs=_now;
-  if((++g_evalN % 120)==0){ Log("TIMING: maxTag=%.1fms maxConst=%.1fms maxHud=%.1fms maxFrameGap=%.1fms (over 120 evals)",
-      g_maxTagMs,g_maxConstMs,g_maxHudMs,g_maxGapMs); g_maxTagMs=g_maxConstMs=g_maxHudMs=g_maxGapMs=0; }
-  return tagRes==sl::Result::eOk && constRes==sl::Result::eOk;
+  if((++g_evalN % 120)==0){ Log("TIMING: maxTag=%.1fms maxConst=%.1fms maxHud=%.1fms maxReflexSleep=%.1fms maxFrameGap=%.1fms (over 120 evals)",
+      g_maxTagMs,g_maxConstMs,g_maxHudMs,g_maxSleepMs,g_maxGapMs); g_maxTagMs=g_maxConstMs=g_maxHudMs=g_maxSleepMs=g_maxGapMs=0; }
+  bool ok = tagRes==sl::Result::eOk && constRes==sl::Result::eOk;
+  if(ok){ g_submitted=true; g_evalSeen.store(true); }
+  return ok;
 }
 
 static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view, VkFormat fmt,
@@ -395,35 +426,30 @@ void NgxProbeTick(){
       (void*)p_GetVoidPointer,(void*)p_GetF,(void*)p_GetUI);
 }
 
-// ---- PCL markers + reflex sleep per present -------------------------------------------
-static sl::FrameToken* g_presentToken = nullptr;
+// ---- present-thread half of the marker ladder ------------------------------------------
+// Present markers MUST be on the present thread with the frame's token: sl.reflex turns our
+// ePresentStart into latency.markerPresentFrame, which is how DLSS-G finds this frame's
+// tags+constants (guide 8.0: "markers ePresentStart/ePresentEnd must provide correct frame
+// index so that it can be matched" to the constants).
 void PresentMarkersBegin(){
-  // ALL SIX markers with ONE token, before the present - the SE's proven shape. Splitting
-  // PresentEnd to after the present pairs it with token N+1 (sl.common increments the frame
-  // counter DURING present), leaving every PresentStart dangling; the DLSS-G pacer keys on
-  // the pair and waits forever the moment generation starts (the 95%-load freeze).
-  // Correct bracketing: sim/render/present-START before the present, present-END AFTER (in
-  // PresentMarkersEnd), with the SAME token. Firing all six at once gave the pacer a zero-
-  // duration present, so its timing model can't survive a hitch (the WaitSemaphores deadlock).
-  // NO slReflexSleep - BG3 drives Reflex natively (NvLowLatencyVk); our sleep double-paced it.
-  // Markers still advance sl.common's counter the +1-shifted constants key to.
   auto& fns = GetSlFns();
-  g_presentToken = nullptr;
-  if(!fns.getNewFrameToken || !fns.pclSetMarker) return;
-  sl::FrameToken* token=nullptr;
-  if(fns.getNewFrameToken(token,nullptr)!=sl::Result::eOk || !token) return;
-  g_presentToken = token;
-  fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*token);
-  fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*token);
-  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*token);
-  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*token);
-  fns.pclSetMarker(sl::PCLMarker::ePresentStart,*token);
+  sl::FrameToken* t = CurrentFrame();
+  if(!t || !fns.pclSetMarker) return;
+  MidFrameMarkers(t);   // no DLSS-SR this frame (menu/loading/video): keep the ladder complete
+  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*t);
+  fns.pclSetMarker(sl::PCLMarker::ePresentStart,*t);
+  static bool tidChecked=false;
+  if(!tidChecked && g_evalTid.load()){ tidChecked=true;
+    uint32_t p=(uint32_t)GetCurrentThreadId(), e=g_evalTid.load();
+    Log("threads: present tid=%lu, DLSS-SR eval tid=%lu%s", (unsigned long)p, (unsigned long)e,
+        p==e ? " (same thread)" : " (DIFFERENT threads - token hand-off is cross-thread)"); }
 }
 void PresentMarkersEnd(){
   auto& fns = GetSlFns();
-  if(!fns.pclSetMarker || !g_presentToken) return;
-  fns.pclSetMarker(sl::PCLMarker::ePresentEnd, *g_presentToken);   // AFTER the real present
-  g_presentToken = nullptr;
+  sl::FrameToken* t = g_frameToken.load();
+  if(t && fns.pclSetMarker) fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*t);   // AFTER the real present
+  BeginFrame();   // next frame: new token, Reflex sleep, SimulationStart
 }
+bool ConsumeEvalSeen(){ return g_evalSeen.exchange(false); }
 
 }

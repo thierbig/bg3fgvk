@@ -148,40 +148,54 @@ void OnDeviceCreated(){
   if(!EnsureSlInit()) { Log("OnDeviceCreated: slInit not ready"); return; }
   if(!EnsureFeatureFunctions()) { Log("OnDeviceCreated: feature function resolution failed"); return; }
 
-  // DLSS-G requires Reflex ON. Set Reflex now; DLSS-G is enabled LATER by the stability gate.
+  // DLSS-G requires Reflex ON. Set Reflex now; DLSS-G is enabled later by the eval-driven gate.
   sl::ReflexOptions ro{};
   ro.mode = sl::ReflexMode::eLowLatencyWithBoost;   // PureDark config: mReflexMode=2 (Boost), no cap
   sl::Result rReflex = p_slReflexSetOptions(ro);
-  Log("slReflexSetOptions -> %d (DLSS-G deferred to the stability gate)", (int)rReflex);
+  Log("slReflexSetOptions -> %d (DLSS-G itself waits for the eval-driven gate)", (int)rReflex);
 }
 
-// Enable/disable DLSS-G generation. Driven by the present-thread stability gate (vkhooks):
-// enabling DLSS-G during the world-load's frame-time hitches freezes the game (user confirmed:
-// alt-tab, which deactivates DLSS-G, is the ONLY way it loads). So we hold generation OFF until
-// the frame rate is smooth (in-world) and turn it off again if it goes hitchy.
+// Enable/suspend DLSS-G generation. Driven by the eval-driven gate in vkhooks (on the present
+// thread, guide 6.0). Every call - on AND off - carries eRetainResourcesWhenOff: without it,
+// eOff frees every FG resource and the next eOn re-creates the feature, a ~140ms frame that
+// Streamline itself flags as "Frame rate over 100ms". Both fatal WaitSemaphores timeouts in
+// the 09-03 logs sit inside that free/re-create cycle. Guide 6.4: "strongly recommended".
+static uint32_t g_framesMax = 0;                 // DLSSGState::numFramesToGenerateMax (0 = not read yet)
+static const uint32_t kFramesToGenerate = 3;     // x4 (PureDark config mDLSSGFrames=4)
+
 void SetDLSSGeneration(bool on){
   if(!p_slDLSSGSetOptions) return;
   sl::DLSSGOptions o{};
   o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-  o.numFramesToGenerate = 3;   // x4
+  uint32_t n = kFramesToGenerate; if(g_framesMax && n > g_framesMax) n = g_framesMax;
+  o.numFramesToGenerate = n;
+  o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
   sl::ViewportHandle vp{0};
   sl::Result r = p_slDLSSGSetOptions(vp, o);
-  Log("SetDLSSGeneration(%d) -> %d", (int)on, (int)r);
+  Log("SetDLSSGeneration(%d) frames=%u retainResources=1 -> %d", (int)on, n, (int)r);
 }
 
+// Present thread only (slDLSSGGetState is not thread safe and SL wants it synced with present).
+// Null options = status + frame stats only, no VRAM estimate (guide 13.0 / 17.0).
 void PollDLSSGState(){
   if(!p_slDLSSGGetState) return;
   sl::DLSSGState st{};
-  sl::DLSSGOptions o{};
-  o.mode = sl::DLSSGMode::eOn;
-  o.numFramesToGenerate = 3;   // x4
   sl::ViewportHandle vp{0};
-  if(p_slDLSSGGetState(vp, st, &o) == sl::Result::eOk){
-    static uint32_t last = 0xFFFFFFFF;
-    if((uint32_t)st.status != last){
-      last = (uint32_t)st.status;
-      Log("DLSSG status=%u framesMax=%u", (unsigned)st.status, st.numFramesToGenerateMax);
-    }
+  if(p_slDLSSGGetState(vp, st, nullptr) != sl::Result::eOk) return;
+  if(st.numFramesToGenerateMax) g_framesMax = st.numFramesToGenerateMax;
+  static uint32_t last = 0xFFFFFFFF;
+  if((uint32_t)st.status != last){
+    last = (uint32_t)st.status;
+    Log("DLSSG status=%u framesMax=%u vsyncSupport=%u", (unsigned)st.status, st.numFramesToGenerateMax,
+        (unsigned)st.bIsVsyncSupportAvailable);
+  }
+  // numFramesActuallyPresented = frames displayed since the previous GetState call, so summed
+  // over N presents it is the real multiplier (x1 = nothing generated, ~x4 = MFG working).
+  static uint32_t polls = 0, shown = 0;
+  polls++; shown += st.numFramesActuallyPresented;
+  if(polls >= 300){
+    Log("FG stats: %u presents -> %u frames displayed (x%.2f) status=%u", polls, shown, shown/(double)polls, (unsigned)st.status);
+    polls = 0; shown = 0;
   }
 }
 }
