@@ -12,6 +12,8 @@ Measured on an RTX 50-series card at 2560x1440 with DLSS Quality: a 30 to 35 fps
 roughly 120 to 140 fps with x4 (Streamline itself reports the multiplier), with the GPU
 otherwise untouched.
 
+![Mod Configuration Menu open while DLSS Frame Generation runs at x4 (indicator top-left, 422 fps top-right)](docs/images/mcm-dlssg-x4.png)
+
 ## Quick start
 
 1. Install [**Native Mod Loader**](https://www.nexusmods.com/baldursgate3/mods/944) (manual

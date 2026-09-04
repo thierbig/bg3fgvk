@@ -9,3 +9,4 @@ out/
 wer.ps1
 !redist/*.dll
 dist/
+.aoe-pasted-images/
