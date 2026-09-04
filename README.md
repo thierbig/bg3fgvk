@@ -2,6 +2,8 @@
 
 Free, open-source **DLSS Frame Generation (x2 / x3 / x4) for Baldur's Gate 3** on Vulkan.
 
+Download: [Nexus Mods](https://www.nexusmods.com/baldursgate3/mods/24804) or the [GitHub Releases](https://github.com/thierbig/bg3fgvk/releases) page.
+
 bg3fgvk is a small DLL that plugs NVIDIA Streamline's DLSS-G into the game's Vulkan swapchain.
 The game's own DLSS Super Resolution provides depth and motion vectors; the NVIDIA driver
 generates and paces the extra frames. There is no upscaler replacement, no menu of its own, and
