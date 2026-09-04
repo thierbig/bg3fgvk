@@ -10,3 +10,8 @@ target_include_directories(fgvk PRIVATE
 target_link_libraries(fgvk PRIVATE "${BG3SE}/Detours/lib.X64/detours.lib")
 target_compile_definitions(fgvk PRIVATE VK_NO_PROTOTYPES WIN32_LEAN_AND_MEAN NOMINMAX)
 set_target_properties(fgvk PROPERTIES OUTPUT_NAME "fgvk")
+
+# Out-of-process stack dumper spawned by fgvk's watchdog on a present-loop stall.
+add_executable(fgvk-stack src/tools/fgvk-stack.cpp)
+target_compile_definitions(fgvk-stack PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(fgvk-stack PRIVATE dbghelp)

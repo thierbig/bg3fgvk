@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <detours.h>
 #include <cstring>
+#include <cstdio>
 #include <atomic>
 #include <thread>
 
@@ -18,17 +19,44 @@ uint32_t gGraphicsFamily{};
 // watchdog: counters + a position marker naming the in-flight call (inputs.cpp writes g_wdEvals/g_wdPos)
 std::atomic<uint32_t> g_wdPresents{0};
 std::atomic<uint32_t> g_wdEvals{0};
-std::atomic<int> g_wdPos{0};   // 0 idle; 1 present-enter; 2 inside proxy present; 3 post-present markers/Reflex sleep; 10/11/12 eval stages
+// pos: 0 idle (inside the game); 1 present-enter; 2 inside proxy present; 3 post-present
+// markers/Reflex sleep; 4 game vkAcquireNextImageKHR; 5 vkWaitForFences; 6 vkQueueSubmit(2);
+// 7 vkDeviceWaitIdle; 8 vkQueueWaitIdle; 10/11/12 eval stages
+std::atomic<int> g_wdPos{0};
+static std::atomic<long long> g_wdPosSinceUs{0};
 static std::atomic<bool> g_genOn{false};   // DLSS-G currently requested on (gate state)
+static inline long long NowUs(){ LARGE_INTEGER f,c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (long long)((double)c.QuadPart*1e6/(double)f.QuadPart); }
+struct PosScope { int prev; PosScope(int code){ prev=g_wdPos.exchange(code); g_wdPosSinceUs.store(NowUs()); } ~PosScope(){ g_wdPos.store(prev); g_wdPosSinceUs.store(NowUs()); } };
+
+// On a stall the watchdog spawns fgvk-stack.exe (next to this DLL) to dump every thread's stack
+// out-of-process into bin\fgvk-stacks.log - the only way to see what the present thread and
+// Streamline's pacer are blocked on inside the driver.
+static void SpawnStackDump(const char* tag){
+  char dll[MAX_PATH]{}; HMODULE self{};
+  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)&SpawnStackDump,&self);
+  GetModuleFileNameA(self, dll, MAX_PATH); char* s=strrchr(dll,'\\'); if(s) *(s+1)=0;
+  char exe[MAX_PATH]{}; GetModuleFileNameA(nullptr, exe, MAX_PATH); s=strrchr(exe,'\\'); if(s) *(s+1)=0;
+  char cmd[1024]; snprintf(cmd,sizeof(cmd),"\"%sfgvk-stack.exe\" %lu \"%sfgvk-stacks.log\"", dll, GetCurrentProcessId(), exe);
+  STARTUPINFOA si{}; si.cb=sizeof(si); PROCESS_INFORMATION pi{};
+  BOOL ok = CreateProcessA(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+  Log("wd: stack dump (%s) -> %s%s", tag, ok?"spawned ":"CreateProcess failed ", ok?cmd:"");
+  if(ok){ CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+}
+
 static void StartWatchdog(){
   static std::atomic<bool> started{false};
   bool exp=false; if(!started.compare_exchange_strong(exp,true)) return;
   std::thread([]{
-    uint32_t lastP=0;
+    uint32_t lastP=0; int stalledTicks=0; int dumps=0;
     for(;;){ Sleep(2000);
       uint32_t p=g_wdPresents.load(), e=g_wdEvals.load(); int pos=g_wdPos.load();
-      if(p!=lastP && pos==0){ lastP=p; continue; }
-      Log("wd: presents=%u evals=%u pos=%d gen=%d%s", p,e,pos,(int)g_genOn.load(),(p==lastP)?" STALLED":"");
+      if(p!=lastP && pos==0){ lastP=p; stalledTicks=0; continue; }
+      bool stalled = (p==lastP);
+      double inPos = (NowUs()-g_wdPosSinceUs.load())/1e6;
+      Log("wd: presents=%u evals=%u pos=%d (%.1fs there) gen=%d%s", p,e,pos,inPos,(int)g_genOn.load(),stalled?" STALLED":"");
+      stalledTicks = stalled ? stalledTicks+1 : 0;
+      // first dump after ~6s of no presents, a second one ~10s later to see what moved
+      if(p>0 && ((stalledTicks==3 && dumps==0) || (stalledTicks==8 && dumps==1))){ dumps++; SpawnStackDump(dumps==1?"first":"second"); }
       lastP=p; }
   }).detach();
 }
@@ -148,18 +176,68 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
 
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
-  g_wdPresents.fetch_add(1); g_wdPos.store(1);
+  g_wdPresents.fetch_add(1);
+  PosScope _p(1);
   NgxProbeTick();                  // cheap after hooked (one bool)
   EvalGate(ConsumeEvalSeen());     // slDLSSGSetOptions on the present thread, before this present (guide 6.0)
   PresentMarkersBegin();           // RenderSubmitEnd + PresentStart with this frame's token (present thread)
   PollDLSSGState();                // slDLSSGGetState on the present thread: status + generated-frame stats
-  static bool logged=false; if(!logged){ logged=true; Log("w_QueuePresentKHR live queue=%p tid=%lu (eval-driven gate)", (void*)q, (unsigned long)GetCurrentThreadId()); }
-  g_wdPos.store(2);
-  VkResult r; { Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
-  g_wdPos.store(3);
-  PresentMarkersEnd();             // PresentEnd, then next frame: new token + Reflex sleep + SimulationStart
-  g_wdPos.store(0);
+  static bool logged=false; if(!logged){ logged=true;
+    Log("w_QueuePresentKHR live queue=%p tid=%lu waitSems=%u swapchains=%u pNext=%s (eval-driven gate)", (void*)q,
+        (unsigned long)GetCurrentThreadId(), pi?pi->waitSemaphoreCount:0u, pi?pi->swapchainCount:0u, (pi&&pi->pNext)?"yes":"no"); }
+  static int oddLogged=0; if(pi && pi->waitSemaphoreCount!=1 && oddLogged<5){ oddLogged++; Log("present with waitSemaphoreCount=%u", pi->waitSemaphoreCount); }
+  VkResult r;
+  { PosScope _q(2); Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
+  static int badLogged=0; if(r!=VK_SUCCESS && badLogged<10){ badLogged++; Log("present -> %d", (int)r); }
+  { PosScope _m(3); PresentMarkersEnd(); }   // PresentEnd, then next frame: new token + Reflex sleep + SimulationStart
   return r;
+}
+
+// ---- stall attribution: thin pass-through wrappers on every call the game can block in ------
+static PFN_vkAcquireNextImageKHR t_AcquireNextImageKHR{};
+static PFN_vkWaitForFences       t_WaitForFences{};
+static PFN_vkQueueSubmit         t_QueueSubmit{};
+static PFN_vkQueueSubmit2        t_QueueSubmit2{};      // vkQueueSubmit2 and vkQueueSubmit2KHR share the prototype
+static PFN_vkDeviceWaitIdle      t_DeviceWaitIdle{};
+static PFN_vkQueueWaitIdle       t_QueueWaitIdle{};
+static PFN_vkSetHdrMetadataEXT   t_SetHdrMetadataEXT{};
+static VKAPI_ATTR VkResult VKAPI_CALL w_AcquireNextImageKHR(VkDevice d, VkSwapchainKHR sc, uint64_t timeout, VkSemaphore sem, VkFence fence, uint32_t* idx){
+  static bool logged=false; if(!logged){ logged=true; Log("game acquire: swapchain=%p timeout=%llu semaphore=%p fence=%p", (void*)sc, (unsigned long long)timeout, (void*)sem, (void*)fence); }
+  VkResult r; { PosScope _(4); Reentry _r; r = t_AcquireNextImageKHR(d,sc,timeout,sem,fence,idx); }
+  static int n=0; if(r!=VK_SUCCESS && n<10){ n++; Log("game acquire -> %d (index=%u)", (int)r, idx?*idx:0u); }
+  return r;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL w_WaitForFences(VkDevice d, uint32_t n, const VkFence* f, VkBool32 all, uint64_t timeout){
+  PosScope _(5); return t_WaitForFences(d,n,f,all,timeout);
+}
+static VKAPI_ATTR VkResult VKAPI_CALL w_QueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo* s, VkFence f){
+  PosScope _(6); return t_QueueSubmit(q,n,s,f);
+}
+static VKAPI_ATTR VkResult VKAPI_CALL w_QueueSubmit2(VkQueue q, uint32_t n, const VkSubmitInfo2* s, VkFence f){
+  PosScope _(6); return t_QueueSubmit2(q,n,s,f);
+}
+static VKAPI_ATTR VkResult VKAPI_CALL w_DeviceWaitIdle(VkDevice d){
+  Log("game vkDeviceWaitIdle (tid=%lu)", (unsigned long)GetCurrentThreadId());
+  VkResult r; { PosScope _(7); Reentry _r; r = t_DeviceWaitIdle(d); } return r;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL w_QueueWaitIdle(VkQueue q){
+  static int n=0; if(n<5){ n++; Log("game vkQueueWaitIdle queue=%p (tid=%lu)", (void*)q, (unsigned long)GetCurrentThreadId()); }
+  PosScope _(8); return t_QueueWaitIdle(q);
+}
+static VKAPI_ATTR void VKAPI_CALL w_SetHdrMetadataEXT(VkDevice d, uint32_t n, const VkSwapchainKHR* sc, const VkHdrMetadataEXT* md){
+  Log("game vkSetHdrMetadataEXT swapchains=%u first=%p maxLum=%.1f (tid=%lu)", n, (n&&sc)?(void*)sc[0]:nullptr, md?md->maxLuminance:0.f, (unsigned long)GetCurrentThreadId());
+  t_SetHdrMetadataEXT(d,n,sc,md);
+}
+// Swap in a wrapper for the names above; everything else passes straight through.
+static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip){
+  if(!strcmp(name,"vkAcquireNextImageKHR")){ t_AcquireNextImageKHR=(PFN_vkAcquireNextImageKHR)ip; return (PFN_vkVoidFunction)w_AcquireNextImageKHR; }
+  if(!strcmp(name,"vkWaitForFences"))      { t_WaitForFences=(PFN_vkWaitForFences)ip;             return (PFN_vkVoidFunction)w_WaitForFences; }
+  if(!strcmp(name,"vkQueueSubmit"))        { t_QueueSubmit=(PFN_vkQueueSubmit)ip;                 return (PFN_vkVoidFunction)w_QueueSubmit; }
+  if(!strcmp(name,"vkQueueSubmit2") || !strcmp(name,"vkQueueSubmit2KHR")){ t_QueueSubmit2=(PFN_vkQueueSubmit2)ip; return (PFN_vkVoidFunction)w_QueueSubmit2; }
+  if(!strcmp(name,"vkDeviceWaitIdle"))     { t_DeviceWaitIdle=(PFN_vkDeviceWaitIdle)ip;           return (PFN_vkVoidFunction)w_DeviceWaitIdle; }
+  if(!strcmp(name,"vkQueueWaitIdle"))      { t_QueueWaitIdle=(PFN_vkQueueWaitIdle)ip;             return (PFN_vkVoidFunction)w_QueueWaitIdle; }
+  if(!strcmp(name,"vkSetHdrMetadataEXT"))  { t_SetHdrMetadataEXT=(PFN_vkSetHdrMetadataEXT)ip;     return (PFN_vkVoidFunction)w_SetHdrMetadataEXT; }
+  return ip;
 }
 
 // ---- wrapped device-proc-addr: hand the game interposer device fns, wrap present/swapchain --
@@ -172,7 +250,7 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev
   if (!ip) return nullptr;
   if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }   // wrap: PollDLSSGState MUST be on the present thread
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
-  return ip;   // everything else: the interposer's own device function
+  return WrapDeviceFn(name, ip);   // stall-attribution wrappers, else the interposer's own device function
 }
 
 // ---- the single entry hook: vkGetInstanceProcAddr ---------------------------------------
@@ -200,7 +278,9 @@ static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetInstanceProcAddr(VkInstance
   if(!strcmp(name,"vkGetInstanceProcAddr")) return (PFN_vkVoidFunction)h_GetInstanceProcAddr;
   if(!strcmp(name,"vkCreateDevice"))    { t_CreateDevice   = (PFN_vkCreateDevice)ip;   return (PFN_vkVoidFunction)w_CreateDevice; }
   if(!strcmp(name,"vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)w_GetDeviceProcAddr;
-  return ip;
+  if(!strcmp(name,"vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }
+  if(!strcmp(name,"vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
+  return WrapDeviceFn(name, ip);   // same wrappers if the game resolves device functions through GIPA
 }
 
 // ---- Vulkan function access for inputs.cpp (UI image, mem props) -------------------------
