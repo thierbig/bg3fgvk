@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 #include "slboot.h"
 #include "vkhooks.h"
+#include "config.h"
 
 #include <sl.h>
 #include <sl_helpers_vk.h>
@@ -150,9 +151,10 @@ void OnDeviceCreated(){
 
   // DLSS-G requires Reflex ON. Set Reflex now; DLSS-G is enabled later by the eval-driven gate.
   sl::ReflexOptions ro{};
-  ro.mode = sl::ReflexMode::eLowLatencyWithBoost;   // PureDark config: mReflexMode=2 (Boost), no cap
+  ro.mode = Cfg().reflexMode==0 ? sl::ReflexMode::eOff : Cfg().reflexMode==1 ? sl::ReflexMode::eLowLatency
+                                : sl::ReflexMode::eLowLatencyWithBoost;   // PureDark config: mReflexMode=2 (Boost), no cap
   sl::Result rReflex = p_slReflexSetOptions(ro);
-  Log("slReflexSetOptions -> %d (DLSS-G itself waits for the eval-driven gate)", (int)rReflex);
+  Log("slReflexSetOptions(mode=%d) -> %d (DLSS-G itself waits for the eval-driven gate)", Cfg().reflexMode, (int)rReflex);
 }
 
 // Enable/suspend DLSS-G generation. Driven by the eval-driven gate in vkhooks (on the present
@@ -161,13 +163,12 @@ void OnDeviceCreated(){
 // Streamline itself flags as "Frame rate over 100ms". Both fatal WaitSemaphores timeouts in
 // the 09-03 logs sit inside that free/re-create cycle. Guide 6.4: "strongly recommended".
 static uint32_t g_framesMax = 0;                 // DLSSGState::numFramesToGenerateMax (0 = not read yet)
-static const uint32_t kFramesToGenerate = 3;     // x4 (PureDark config mDLSSGFrames=4)
 
 void SetDLSSGeneration(bool on){
   if(!p_slDLSSGSetOptions) return;
   sl::DLSSGOptions o{};
   o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-  uint32_t n = kFramesToGenerate; if(g_framesMax && n > g_framesMax) n = g_framesMax;
+  uint32_t n = Cfg().dlssgFrames; if(g_framesMax && n > g_framesMax) n = g_framesMax;
   o.numFramesToGenerate = n;
   o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
   sl::ViewportHandle vp{0};

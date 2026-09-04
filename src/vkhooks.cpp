@@ -2,6 +2,7 @@
 #include "log.h"
 #include "slboot.h"
 #include "inputs.h"
+#include "config.h"
 #include <windows.h>
 #include <detours.h>
 #include <cstring>
@@ -71,8 +72,8 @@ static void StartWatchdog(){
 // vkDeviceWaitIdle from a loader thread (sl.log tid 540); with FG suspended there that flush
 // meets an idle pacer.
 static uint32_t g_evalStreak = 0, g_idleStreak = 0;
-static const uint32_t kOnAfterEvalFrames = 60;   // ~2s of world rendering before enabling
-static const uint32_t kOffAfterIdleFrames = 30;  // ~0.5-1s of presents without DLSS-SR before suspending
+#define kOnAfterEvalFrames  (Cfg().onAfterEvalFrames)    // ~2s of world rendering before enabling
+#define kOffAfterIdleFrames (Cfg().offAfterIdleFrames)   // ~0.5-1s of presents without DLSS-SR before suspending
 static void EvalGate(bool evalThisFrame){
   if(evalThisFrame){
     g_idleStreak = 0;

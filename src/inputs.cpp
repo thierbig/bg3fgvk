@@ -10,6 +10,7 @@
 #include "log.h"
 #include "slboot.h"
 #include "vkhooks.h"
+#include "config.h"
 #include <windows.h>
 #include <detours.h>
 #include <sl.h>
@@ -84,8 +85,8 @@ static bool g_submitted=false;                   // tags+constants filed for thi
 static std::atomic<uint32_t> g_evalTid{0};
 // Reflex sleep is REQUIRED by the Reflex checklist regardless of mode; it was dropped earlier on
 // the (wrong) belief that BG3 drives Reflex natively - bg3.exe has no Reflex integration at all.
-// One-line kill switch if the driver's pacing misbehaves.
-static const bool kReflexSleep = true;
+// fgvk.ini ReflexSleep=0 is the kill switch if the driver's pacing misbehaves.
+#define kReflexSleep (Cfg().reflexSleep)
 
 // Start the next frame: new token, Reflex sleep, SimulationStart (NVIDIA's sample ladder).
 static sl::FrameToken* BeginFrame(){
@@ -296,30 +297,38 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   return ok;
 }
 
+// Optional tags (fgvk.ini TagHUDLess / TagUI). Default OFF = backbuffer only, PureDark parity:
+// his captured recipe carries no UI buffer and only occasionally a HUD-less one. The DLSS-SR
+// output is pre-post-processing (linear/HDR before tonemap); the guide requires HUD-less to be
+// in the SAME color space as the backbuffer, so feeding it can produce halos/ghosting.
 static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view, VkFormat fmt,
                             uint32_t w, uint32_t h){
   auto& fns = GetSlFns();
   if(!fns.setTagForFrame || !g_lastToken) return;
+  if(!g_logHudTag){ g_logHudTag=true;
+    Log("DLSS-SR output %ux%u fmt=%d; optional tags: HUDLess=%d UI=%d", w, h, (int)fmt, (int)Cfg().tagHudless, (int)Cfg().tagUI); }
+  if(!Cfg().tagHudless && !Cfg().tagUI) return;
   sl::Resource colorRes(sl::ResourceType::eTex2d,(void*)image,(void*)nullptr,
       (void*)view,(uint32_t)VK_IMAGE_LAYOUT_GENERAL);   // NGX writes Output as compute storage
   DescribeResource(colorRes,w,h,fmt,
       VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
   sl::Extent extent{0,0,w,h};
-  bool haveUI = EnsureUIColorImage(cmd,w,h);
+  bool haveUI = Cfg().tagUI && EnsureUIColorImage(cmd,w,h);
   sl::Resource uiRes(sl::ResourceType::eTex2d,(void*)g_uiImage,(void*)g_uiMem,
       (void*)g_uiView,(uint32_t)VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   DescribeResource(uiRes,w,h,VK_FORMAT_R8G8B8A8_UNORM,
       VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-  sl::ResourceTag tags[] = {
-    sl::ResourceTag(&colorRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent),
-    sl::ResourceTag(&uiRes, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &extent),
-  };
+  sl::ResourceTag tags[2]; uint32_t n=0;
+  if(Cfg().tagHudless) tags[n++] = sl::ResourceTag(&colorRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent);
+  if(haveUI)           tags[n++] = sl::ResourceTag(&uiRes, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &extent);
+  if(!n) return;
   sl::ViewportHandle vp{0};
   double _h0=NowMs();
-  auto res = fns.setTagForFrame(*g_lastToken, vp, tags, haveUI?2u:1u, reinterpret_cast<sl::CommandBuffer*>(cmd));
+  auto res = fns.setTagForFrame(*g_lastToken, vp, tags, n, reinterpret_cast<sl::CommandBuffer*>(cmd));
   double _hms=NowMs()-_h0; if(_hms>g_maxHudMs) g_maxHudMs=_hms;
-  if(res==sl::Result::eOk && !g_logHudTag){ g_logHudTag=true; Log("HUDLessColor+UI tagged %ux%u (color source live)",w,h); }
-  else if(res!=sl::Result::eOk && !g_logHudTag){ g_logHudTag=true; Log("slSetTagForFrame(HUDLess) failed: %d",(int)res); }
+  static bool l2=false; if(!l2){ l2=true;
+    if(res==sl::Result::eOk) Log("optional tags submitted (%u) %ux%u", n, w, h);
+    else Log("slSetTagForFrame(HUDLess/UI) failed: %d",(int)res); }
 }
 
 // ---- NGX inputs read (ported readNgxFrameInputs) --------------------------------------

@@ -37,6 +37,29 @@ loads every DLL in `bin\NativeMods\` at startup.
 - `bin\sl.log` - Streamline verbose. Fatal signature so far: `waitCPUFence ... WaitSemaphores
   ... timed out` (500 ms cap) followed by a black screen and freeze.
 
+## Configuration
+
+`bin\NativeMods\fgvk.ini` is written with defaults on first run and read at game start:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `DLSSGFrames` | 3 | generated frames per real frame (1 = x2, 2 = x3, 3 = x4) |
+| `ReflexMode` | 2 | 0 off, 1 low latency, 2 low latency + boost |
+| `ReflexSleep` | 1 | call slReflexSleep once per frame |
+| `TagHUDLess` | 0 | feed the DLSS-SR output as HUD-less color (backbuffer only when 0) |
+| `TagUI` | 0 | feed a transparent UI color+alpha layer |
+| `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
+| `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
+
+## Known incompatibility: the custom Script Extender build
+
+The `upscaler-run` build of BG3SE (C:\Dev\bg3se-upscaler) detours the driver's Vulkan entry
+points and serializes presents under `fgQueueMutex_`, including the ones Streamline's pacer
+thread makes. Its outermost present holds that mutex while calling into the interposer, which
+waits on the pacer, which needs the mutex: deadlock, black screen, freeze (`fgvk-stacks.log`
+shows `sl.dlss_g -> sl.common -> BG3ScriptExtender -> vulkan-1`). Until that build is fixed, run
+with its loaders renamed (`DWrite.dll.fgvk-off`, `ScriptExtender.dll.fgvk-off`).
+
 ## Verify arming
 
 1. Launch BG3 with the loaded `fgvk.dll`.
