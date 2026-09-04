@@ -168,7 +168,7 @@ void SetDLSSGeneration(bool on){
   if(!p_slDLSSGSetOptions) return;
   sl::DLSSGOptions o{};
   o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-  uint32_t n = Cfg().dlssgFrames; if(g_framesMax && n > g_framesMax) n = g_framesMax;
+  uint32_t n = Rt().frames; if(n<1) n=1; if(g_framesMax && n > g_framesMax) n = g_framesMax;
   o.numFramesToGenerate = n;
   o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
   sl::ViewportHandle vp{0};

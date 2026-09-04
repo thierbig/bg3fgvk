@@ -46,10 +46,13 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `DLSSGFrames` | 3 | generated frames per real frame (1 = x2, 2 = x3, 3 = x4) |
 | `ReflexMode` | 2 | 0 off, 1 low latency, 2 low latency + boost |
 | `ReflexSleep` | 1 | call slReflexSleep once per frame |
-| `TagHUDLess` | 0 | feed the DLSS-SR output as HUD-less color (backbuffer only when 0) |
+| `TagHUDLess` | 1 | feed the DLSS-SR output as HUD-less color (PureDark's recipe; 0 = backbuffer only) |
 | `TagUI` | 0 | feed a transparent UI color+alpha layer |
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
+| `KeyToggleFG` | 0x6A (numpad *) | hotkey: DLSS-G on/off |
+| `KeyCycleFrames` | 0x23 (End) | hotkey: cycle x2 / x3 / x4 |
+| `KeyToggleHUDLess` | 0x24 (Home) | hotkey: HUD-less tag on/off (live A/B) |
 
 ## Script Extender coexistence
 

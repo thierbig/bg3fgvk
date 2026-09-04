@@ -83,11 +83,19 @@ static uint32_t g_evalStreak = 0, g_idleStreak = 0;
 #define kOnAfterEvalFrames  (Cfg().onAfterEvalFrames)    // ~2s of world rendering before enabling
 #define kOffAfterIdleFrames (Cfg().offAfterIdleFrames)   // ~0.5-1s of presents without DLSS-SR before suspending
 static void EvalGate(bool evalThisFrame){
+  // Hotkeys first: a user toggle or multiplier change is applied right here, on the present thread.
+  static uint32_t appliedFrames = 0;
+  if(PollHotkeys()){
+    if(Rt().fgUserOff && g_genOn.load()){ g_genOn.store(false); Log("gate: user hotkey -> DLSS-G suspended"); SetDLSSGeneration(false); }
+    else if(g_genOn.load() && Rt().frames != appliedFrames){ SetDLSSGeneration(true); }
+    appliedFrames = Rt().frames;
+  }
+  if(Rt().fgUserOff){ g_evalStreak = 0; return; }
   if(evalThisFrame){
     g_idleStreak = 0;
     if(g_evalStreak < 100000) g_evalStreak++;
     if(!g_genOn.load() && g_evalStreak >= kOnAfterEvalFrames){
-      g_genOn.store(true); Log("gate: %u consecutive DLSS-SR frames -> DLSS-G ON", g_evalStreak); SetDLSSGeneration(true); }
+      g_genOn.store(true); appliedFrames = Rt().frames; Log("gate: %u consecutive DLSS-SR frames -> DLSS-G ON", g_evalStreak); SetDLSSGeneration(true); }
   } else {
     g_evalStreak = 0;
     if(g_idleStreak < 100000) g_idleStreak++;
