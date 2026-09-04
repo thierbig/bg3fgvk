@@ -1,11 +1,9 @@
-// DLSS-G input pipeline, ported from the proven BG3SE dlss-fg SL-era code:
-// snoop the game's DLSS-SR EvaluateFeature for depth/mvec/jitter, tag all four
-// required buffers (Depth, MotionVectors, HUDLessColor = SR Output, UIColorAndAlpha =
-// transparent image), push sl::Constants (identity reprojection first), and emit
-// PCL markers per present. All hard-won findings preserved:
-//  - frame token +1 shift (sl.common pre-increments before sl.dlss_g's lookups)
-//  - full Vulkan resource descriptions are MANDATORY (undefined format aborts in SL)
-//  - UIColorAndAlpha was the last required tag without which nothing generates
+// DLSS-G input pipeline: snoop the game's DLSS-SR EvaluateFeature for depth/mvec/jitter, tag
+// Depth, MotionVectors and HUDLessColor (= the DLSS-SR output, PureDark's recipe), push
+// sl::Constants (synthetic perspective, identity reprojection - also his recipe), and run the
+// PCL/Reflex marker ladder across the eval thread and the present thread on ONE frame token per
+// frame (see the frame-token section below for why, and how the two threads hand it over).
+// Full Vulkan resource descriptions are mandatory (an undefined format aborts inside SL).
 #include "inputs.h"
 #include "log.h"
 #include "slboot.h"
@@ -19,6 +17,7 @@
 #include <sl_reflex.h>
 #include <cstring>
 #include <atomic>
+#include <mutex>
 
 // ---- minimal NGX surface (no vendored NGX SDK; layouts match the driver ABI) ----------
 typedef int NVSDK_NGX_Result;
@@ -84,34 +83,48 @@ static sl::FrameToken* g_lastToken=nullptr;
 // frame-based tag store has no fallback). The old "+1 shift" dates from calling the token
 // function twice per frame; with one call it made every present consume the PREVIOUS frame's
 // inputs (sl.log: "Unable to find 'common' constants for frame 1 ... using last set for frame 2").
-static std::atomic<sl::FrameToken*> g_frameToken{nullptr};
+//
+// BG3 runs the DLSS-SR evaluate and the present on DIFFERENT worker threads. A queue of frame
+// slots makes the hand-off order-independent: the eval thread starts a new frame (new token)
+// whenever the newest slot already carries a submission (i.e. it ran ahead of the previous
+// frame's present), and the present thread always presents the OLDEST slot. Depth is capped
+// at 3 pending frames - Streamline keeps MAX_FRAMES_IN_FLIGHT=6 handles alive, so nothing we
+// hold can be recycled under us.
 static std::atomic<bool> g_evalSeen{false};     // DLSS-SR filed tags+constants since the last present
-static bool g_midMarkers=false;                  // SimulationEnd+RenderSubmitStart emitted for this token
-static bool g_submitted=false;                   // tags+constants filed for this token
 static std::atomic<uint32_t> g_evalTid{0};
 // Reflex sleep is REQUIRED by the Reflex checklist regardless of mode; it was dropped earlier on
 // the (wrong) belief that BG3 drives Reflex natively - bg3.exe has no Reflex integration at all.
 // fgvk.ini ReflexSleep=0 is the kill switch if the driver's pacing misbehaves.
 #define kReflexSleep (Cfg().reflexSleep)
 
-// Start the next frame: new token, Reflex sleep, SimulationStart (NVIDIA's sample ladder).
-static sl::FrameToken* BeginFrame(){
-  auto& fns = GetSlFns();
-  sl::FrameToken* t=nullptr;
+struct FrameSlot { sl::FrameToken* tok=nullptr; uint32_t index=0; bool submitted=false; bool simStarted=false; bool midMarkers=false; };
+static std::mutex g_qMutex;                       // guards the ring below (eval thread vs present thread)
+static const uint32_t kQCap = 4;
+static FrameSlot g_q[kQCap]; static uint32_t g_qHead=0, g_qCount=0;   // head = next to present
+static FrameSlot* QFront(){ return g_qCount ? &g_q[g_qHead] : nullptr; }
+static FrameSlot* QBack(){ return g_qCount ? &g_q[(g_qHead+g_qCount-1)%kQCap] : nullptr; }
+static FrameSlot* QFind(uint32_t index){ for(uint32_t i=0;i<g_qCount;i++){ FrameSlot& s=g_q[(g_qHead+i)%kQCap]; if(s.index==index) return &s; } return nullptr; }
+static void QPop(){ if(g_qCount){ g_qHead=(g_qHead+1)%kQCap; g_qCount--; } }
+// New SL frame token (advances SL's counter) pushed as the newest slot; drops the oldest if the
+// evals are outrunning the presents (would mean two DLSS-SR evaluates per presented frame).
+static FrameSlot* QPushNew(){
+  auto& fns = GetSlFns(); sl::FrameToken* t=nullptr;
   if(!fns.getNewFrameToken || fns.getNewFrameToken(t,nullptr)!=sl::Result::eOk || !t) return nullptr;
-  g_frameToken.store(t); g_midMarkers=false; g_submitted=false;
-  if(kReflexSleep && fns.reflexSleep){ double t0=NowMs(); fns.reflexSleep(*t); double d=NowMs()-t0; if(d>g_maxSleepMs) g_maxSleepMs=d; }
-  if(fns.pclSetMarker) fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*t);
-  return t;
+  if(g_qCount>=3){ static bool l=false; if(!l){ l=true; Log("frame token queue full - evals outrunning presents, dropping oldest frame %u", g_q[g_qHead].index); } QPop(); }
+  FrameSlot& s = g_q[(g_qHead+g_qCount)%kQCap]; s = FrameSlot{ t, (uint32_t)*t, false, false, false }; g_qCount++;
+  return &s;
 }
-static sl::FrameToken* CurrentFrame(){ sl::FrameToken* t=g_frameToken.load(); return t ? t : BeginFrame(); }
+static void SimStart(FrameSlot& s){
+  if(s.simStarted) return; s.simStarted=true;
+  auto& fns = GetSlFns(); if(fns.pclSetMarker && s.tok) fns.pclSetMarker(sl::PCLMarker::eSimulationStart,*s.tok);
+}
 // SimulationEnd + RenderSubmitStart: at the DLSS-SR evaluate when there is one (mid render
 // submit), otherwise just before present so the ladder stays complete and ordered.
-static void MidFrameMarkers(sl::FrameToken* t){
-  if(g_midMarkers || !t) return; g_midMarkers=true;
-  auto& fns = GetSlFns(); if(!fns.pclSetMarker) return;
-  fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*t);
-  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*t);
+static void MidMarkers(FrameSlot& s){
+  if(s.midMarkers) return; s.midMarkers=true;
+  auto& fns = GetSlFns(); if(!fns.pclSetMarker || !s.tok) return;
+  fns.pclSetMarker(sl::PCLMarker::eSimulationEnd,*s.tok);
+  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitStart,*s.tok);
 }
 
 // UIColorAndAlpha transparent image (session lifetime)
@@ -234,15 +247,15 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   auto& fns = GetSlFns();
   if(!fns.getNewFrameToken || !fns.setTagForFrame || !fns.setConstants) return false;
 
-  sl::FrameToken* token = CurrentFrame();
-  if(!token) return false;
+  // Take the newest frame slot; if it already carries a submission we have run ahead of the
+  // previous frame's present (pipelined engine) and this evaluate belongs to a NEW frame.
+  sl::FrameToken* token=nullptr; uint32_t slotIndex=0;
+  { std::lock_guard<std::mutex> lk(g_qMutex);
+    FrameSlot* b = QBack();
+    if(!b || b->submitted){ b = QPushNew(); if(!b) return false; SimStart(*b); }
+    MidMarkers(*b);   // SimulationEnd + RenderSubmitStart (we are inside the render submit)
+    token = b->tok; slotIndex = b->index; }
   g_evalTid.store((uint32_t)GetCurrentThreadId());
-  if(g_submitted){
-    // SL forbids different constants twice under one frame; keep the first (main scene) set.
-    static bool l=false; if(!l){ l=true; Log("second DLSS-SR evaluate within one frame - ignored"); }
-    return false;
-  }
-  MidFrameMarkers(token);   // SimulationEnd + RenderSubmitStart (we are inside the render submit)
   if(!g_logTokenShift){ g_logTokenShift=true;
     Log("FG frame token %u: tags+constants+present markers share one token per frame (no +1 shift) evalTid=%lu",
         (uint32_t)*token, (unsigned long)GetCurrentThreadId()); }
@@ -302,7 +315,10 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   if((++g_evalN % 120)==0){ Log("TIMING: maxTag=%.1fms maxConst=%.1fms maxHud=%.1fms maxReflexSleep=%.1fms maxFrameGap=%.1fms (over 120 evals)",
       g_maxTagMs,g_maxConstMs,g_maxHudMs,g_maxSleepMs,g_maxGapMs); g_maxTagMs=g_maxConstMs=g_maxHudMs=g_maxSleepMs=g_maxGapMs=0; }
   bool ok = tagRes==sl::Result::eOk && constRes==sl::Result::eOk;
-  if(ok){ g_submitted=true; g_evalSeen.store(true); }
+  if(ok){
+    { std::lock_guard<std::mutex> lk(g_qMutex); if(FrameSlot* s=QFind(slotIndex)) s->submitted=true; }
+    g_evalSeen.store(true);
+  }
   return ok;
 }
 
@@ -464,11 +480,13 @@ void NgxProbeTick(){
 // index so that it can be matched" to the constants).
 void PresentMarkersBegin(){
   auto& fns = GetSlFns();
-  sl::FrameToken* t = CurrentFrame();
-  if(!t || !fns.pclSetMarker) return;
-  MidFrameMarkers(t);   // no DLSS-SR this frame (menu/loading/video): keep the ladder complete
-  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*t);
-  fns.pclSetMarker(sl::PCLMarker::ePresentStart,*t);
+  if(!fns.pclSetMarker) return;
+  std::lock_guard<std::mutex> lk(g_qMutex);
+  FrameSlot* f = QFront();
+  if(!f){ f = QPushNew(); if(!f) return; }   // no DLSS-SR this frame (menu/loading/video)
+  SimStart(*f); MidMarkers(*f);              // keep the ladder complete and ordered
+  fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*f->tok);
+  fns.pclSetMarker(sl::PCLMarker::ePresentStart,*f->tok);   // -> latency.markerPresentFrame = this frame
   static bool tidChecked=false;
   if(!tidChecked && g_evalTid.load()){ tidChecked=true;
     uint32_t p=(uint32_t)GetCurrentThreadId(), e=g_evalTid.load();
@@ -477,9 +495,18 @@ void PresentMarkersBegin(){
 }
 void PresentMarkersEnd(){
   auto& fns = GetSlFns();
-  sl::FrameToken* t = g_frameToken.load();
-  if(t && fns.pclSetMarker) fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*t);   // AFTER the real present
-  BeginFrame();   // next frame: new token, Reflex sleep, SimulationStart
+  sl::FrameToken* next=nullptr; uint32_t nextIndex=0;
+  { std::lock_guard<std::mutex> lk(g_qMutex);
+    if(FrameSlot* f = QFront()){
+      if(fns.pclSetMarker && f->tok) fns.pclSetMarker(sl::PCLMarker::ePresentEnd,*f->tok);   // AFTER the real present
+      QPop(); }
+    // Next frame: reuse the slot a pipelined eval already opened, else open it here.
+    FrameSlot* n = QFront(); if(!n) n = QPushNew();
+    if(n){ next = n->tok; nextIndex = n->index; } }
+  if(!next) return;
+  // Reflex sleep outside the lock (it can block ~1 frame) so an eval thread never waits on us.
+  if(kReflexSleep && fns.reflexSleep){ double t0=NowMs(); fns.reflexSleep(*next); double d=NowMs()-t0; if(d>g_maxSleepMs) g_maxSleepMs=d; }
+  { std::lock_guard<std::mutex> lk(g_qMutex); if(FrameSlot* s=QFind(nextIndex)) SimStart(*s); }
 }
 bool ConsumeEvalSeen(){ return g_evalSeen.exchange(false); }
 
