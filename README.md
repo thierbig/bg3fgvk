@@ -169,7 +169,9 @@ All diagnostics are in `bin\fgvk.log` (this mod) and `bin\sl.log` (Streamline's 
 
 **`FG stats` shows `x1.00` while playing.**
 - Check the `gate:` lines. If DLSS-G never turned ON, the game is not running DLSS: enable DLSS
-  in Video settings.
+  in Video settings. Note that BG3 silently drops the DLSS setting if DLSS ever failed to
+  initialize on a previous launch (for example after a broken install); just select DLSS again
+  under Options, Video, Upscaling.
 - Check the `DLSSG status=` line: `status=0` is good. `status=2` means Reflex is off (set
   `ReflexMode` to 1 or 2). `status=1` means the resolution is too low.
 - The window must have focus.
