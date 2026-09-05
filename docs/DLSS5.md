@@ -1,6 +1,7 @@
 # DLSS 5 Neural Rendering alongside bg3fgvk
 
-Optional guide for the [bg3fgvk](../README.md) frame generation mod.
+Optional guide for the [bg3fgvk](../README.md) frame generation mod. The combination was found and
+reported by **!FingerPaint**; thanks.
 
 bg3fgvk works together with **DLSS 5**, NVIDIA's Neural Rendering pass, through the
 [OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR) fork of OptiScaler by Dagherbou.

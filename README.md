@@ -121,3 +121,5 @@ Developers: build steps, how it works, the Streamline runtime files and the stac
 - PureDark's frame generation mod for Baldur's Gate 3, whose DLSS-G input recipe served as the
   reference for what the game's buffers look like.
 - Dagherbou's OptiScaler_DLSSNR fork, which makes the optional DLSS 5 setup possible.
+- !FingerPaint, who found that the OptiScaler_DLSSNR fork and bg3fgvk work together and reported
+  the combination.
