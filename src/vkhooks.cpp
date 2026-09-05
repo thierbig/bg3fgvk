@@ -1,4 +1,5 @@
 #include "vkhooks.h"
+#include "exportroute.h"
 #include "log.h"
 #include "slboot.h"
 #include "inputs.h"
@@ -135,6 +136,27 @@ struct Reentry { Reentry(){ ++g_reentry; } ~Reentry(){ --g_reentry; } };
 static std::atomic<int> g_globalReal{0};
 struct GlobalReal { GlobalReal(){ ++g_globalReal; } ~GlobalReal(){ --g_globalReal; } };
 static inline bool ForceReal(){ return g_reentry || g_globalReal.load(std::memory_order_acquire); }
+// Loader vkCreateDevice window: set while the loader's EXPORTED vkCreateDevice executes on this
+// thread (our detour on that export is attached late, in w_CreateInstance, so it is the outermost
+// one and covers other mods' post-create work). See exportroute.h.
+static thread_local int g_loaderCreateDevice = 0;
+static thread_local int g_loaderCreateReentry = 0;   // our re-entry depth when the window opened
+static PFN_vkCreateDevice o_CreateDevice_export{};
+static VKAPI_ATTR VkResult VKAPI_CALL h_CreateDeviceExport(VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
+    const VkAllocationCallbacks* a, VkDevice* out){
+  int prevReentry = g_loaderCreateReentry; g_loaderCreateReentry = g_reentry;
+  ++g_loaderCreateDevice; VkResult r = o_CreateDevice_export(pd, ci, a, out); --g_loaderCreateDevice;
+  g_loaderCreateReentry = prevReentry; return r;
+}
+static void InstallCreateDeviceExportHook(){
+  static bool done=false; if(done) return; done=true;
+  HMODULE vk = GetModuleHandleA("vulkan-1.dll"); if(!vk) return;
+  o_CreateDevice_export = (PFN_vkCreateDevice)GetProcAddress(vk, "vkCreateDevice"); if(!o_CreateDevice_export) return;
+  DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
+  DetourAttach(&(PVOID&)o_CreateDevice_export,(PVOID)h_CreateDeviceExport);
+  LONG r = DetourTransactionCommit();
+  Log("export vkCreateDevice hooked late (outermost) commit=%ld - third-party lookups inside it get the game's view", r);
+}
 
 // ---- thin wrappers: call the INTERPOSER target, capture/act, return ----------------------
 // slInit runs HERE (in the actual vkCreateInstance CALL), never in the GIPA resolve: the
@@ -152,6 +174,7 @@ static void EnsureSlAndInterposer(){
 
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateInstance(
     const VkInstanceCreateInfo* ci, const VkAllocationCallbacks* a, VkInstance* out){
+  InstallCreateDeviceExportHook();   // late attach: after other mods' load-time hooks, so ours is outermost
   EnsureSlAndInterposer();   // slInit here (loader lock released), NOT in the GIPA resolve
   // Resolve the interposer's vkCreateInstance now that SL is initialized.
   if(!t_CreateInstance){ Reentry _; t_CreateInstance = (PFN_vkCreateInstance)(ip_GIPA ? ip_GIPA(nullptr,"vkCreateInstance") : nullptr); }
@@ -262,10 +285,14 @@ static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip){
 
 // ---- wrapped device-proc-addr: hand the game interposer device fns, wrap present/swapchain --
 static PFN_vkGetDeviceProcAddr o_GDPA_real{};   // real loader GDPA (Detours trampoline once the export is hooked)
+static PFN_vkVoidFunction GameViewGDPA(VkDevice dev, const char* name);
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL w_GetDeviceProcAddr(VkDevice dev, const char* name){
   if (!name) return nullptr;
   // Re-entrant (interposer forwarding to the driver): go to the real loader, not the interposer.
   if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  return GameViewGDPA(dev, name);
+}
+static PFN_vkVoidFunction GameViewGDPA(VkDevice dev, const char* name){
   // Before the interposer exists (early third-party resolution) there is nothing to wrap yet.
   if (!ip_GDPA) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
   if (!strcmp(name, "vkGetDeviceProcAddr")) return (PFN_vkVoidFunction)w_GetDeviceProcAddr;   // keep later lookups in our view
@@ -323,8 +350,15 @@ void* LoaderFn(const char* name){
 // detours land on our wrappers on the game thread, their image queries return the buffers the
 // game actually presents. Calls from inside the interposer (ForceReal) still reach the loader.
 static VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL h_GetDeviceProcAddrExport(VkDevice dev, const char* name){
-  if (ForceReal()) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
-  return w_GetDeviceProcAddr(dev, name);
+  if (!name) return nullptr;
+  bool inWindow = InLoaderCreateWindow(g_loaderCreateDevice, g_reentry, g_loaderCreateReentry);
+  if (ExportRouting(ForceReal(), inWindow) == ExportView::Real) return o_GDPA_real ? o_GDPA_real(dev, name) : nullptr;
+  if (!inWindow) return w_GetDeviceProcAddr(dev, name);
+  // A third party resolving inside the loader's vkCreateDevice (its own export detour): game view.
+  PFN_vkVoidFunction ip = GameViewGDPA(dev, name);
+  static int logged=0; if(logged<8){ logged++;
+    Log("export vkGetDeviceProcAddr(%s) inside loader vkCreateDevice (third-party hook) -> game view %p", name, (void*)ip); }
+  return ip ? ip : (o_GDPA_real ? o_GDPA_real(dev, name) : nullptr);
 }
 static PFN_vkGetSwapchainImagesKHR o_GetSwapchainImagesKHR_export{};
 static PFN_vkAcquireNextImageKHR   o_AcquireNextImageKHR_export{};
@@ -376,6 +410,7 @@ void RemoveVkHooks(){
   if(o_GetSwapchainImagesKHR_export) DetourDetach(&(PVOID&)o_GetSwapchainImagesKHR_export,(PVOID)h_GetSwapchainImagesKHRExport);
   if(o_AcquireNextImageKHR_export)   DetourDetach(&(PVOID&)o_AcquireNextImageKHR_export,(PVOID)h_AcquireNextImageKHRExport);
   if(o_QueuePresentKHR_export)       DetourDetach(&(PVOID&)o_QueuePresentKHR_export,(PVOID)h_QueuePresentKHRExport);
+  if(o_CreateDevice_export)          DetourDetach(&(PVOID&)o_CreateDevice_export,(PVOID)h_CreateDeviceExport);
   DetourTransactionCommit();
 }
 }

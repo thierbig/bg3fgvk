@@ -7,7 +7,7 @@ static void expectNear(const char* name, float got, float want){
   if (fabsf(got - want) > 1e-7f){ printf("FAIL %s: got %.9g want %.9g\n", name, got, want); fails++; }
   else printf("ok   %s\n", name);
 }
-int main(){
+int test_mvecscale(){
   // BG3 hands DLSS-SR mvScale (-1,-1): pixel-space vectors, sign flipped. Streamline wants the
   // factor that normalises the buffer into [-1,1]; its DLSS-G plugin multiplies that factor back
   // by the mvec extent before the driver sees it, so to land at (-1,-1) again the constant must
@@ -22,6 +22,5 @@ int main(){
   auto z = fgvk::MvecScaleForStreamline(-1.f, -1.f, 0, 0, true);
   expectNear("zero extent falls back to raw x", z.x, -1.f);
   expectNear("zero extent falls back to raw y", z.y, -1.f);
-  printf("%d failure(s)\n", fails);
-  return fails ? 1 : 0;
+  return fails;
 }

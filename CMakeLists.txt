@@ -18,7 +18,7 @@ target_compile_definitions(fgvk-stack PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(fgvk-stack PRIVATE dbghelp)
 
 # Unit tests (host-only, no Vulkan/Streamline dependency).
-add_executable(fgvk-tests src/tests/mvecscale_test.cpp)
+add_executable(fgvk-tests src/tests/tests_main.cpp src/tests/mvecscale_test.cpp src/tests/exportroute_test.cpp)
 target_include_directories(fgvk-tests PRIVATE src)
 enable_testing()
 add_test(NAME mvecscale COMMAND fgvk-tests)

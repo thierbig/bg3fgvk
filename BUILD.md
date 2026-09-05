@@ -70,6 +70,15 @@ thread and its image queries return the presented (fake) buffers. Calls from ins
 still reach the loader. If the extender must be excluded for a test, rename `bin\DWrite.dll` and
 `bin\ScriptExtender.dll` to `*.fgvk-off`.
 
+Overlays that detour the loader's exported `vkCreateDevice` (OptiScaler) resolve their present and
+swapchain hooks from inside that call, which runs underneath Streamline's own vkCreateDevice, i.e.
+inside fgvk's re-entry window where lookups normally go to the real loader. They would then hook the
+driver's present under Streamline's pacer thread and deadlock DLSS-G when they draw (the OptiScaler
+menu freeze). fgvk therefore also detours the exported `vkCreateDevice`, attached late in
+`w_CreateInstance` so it is the outermost hook, and while it executes every export lookup gets the
+game's view (`exportroute.h`, unit-tested). `fgvk.log` prints `export vkGetDeviceProcAddr(...) inside
+loader vkCreateDevice (third-party hook) -> game view` when it happens.
+
 ## NVIDIA App overrides
 
 The NVIDIA App applies BG3's per-game DLSS overrides to fgvk's Streamline instance (the on-screen
