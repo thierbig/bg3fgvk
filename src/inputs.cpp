@@ -5,6 +5,7 @@
 // frame (see the frame-token section below for why, and how the two threads hand it over).
 // Full Vulkan resource descriptions are mandatory (an undefined format aborts inside SL).
 #include "inputs.h"
+#include "mvecscale.h"
 #include "log.h"
 #include "slboot.h"
 #include "vkhooks.h"
@@ -289,7 +290,10 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   c.prevClipToClip = MakeIdentity();
   c.cameraPinholeOffset = sl::float2(0.f,0.f);
   c.jitterOffset = sl::float2(g_in.jitterX, g_in.jitterY);
-  c.mvecScale = sl::float2(g_in.mvScaleX, g_in.mvScaleY);   // raw NGX values (already -1,-1)
+  // Streamline normalises: it multiplies this by the mvec extent before the driver sees it, so
+  // raw NGX pixel-space values (-1,-1) must be divided by the extent (see mvecscale.h).
+  MvecScale ms = MvecScaleForStreamline(g_in.mvScaleX, g_in.mvScaleY, g_in.mvecW, g_in.mvecH, Cfg().mvecScaleNormalized);
+  c.mvecScale = sl::float2(ms.x, ms.y);
   c.cameraPos = sl::float3(0,0,0);
   c.cameraUp = sl::float3(0,1,0);
   c.cameraRight = sl::float3(1,0,0);
@@ -399,6 +403,17 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
     void* bb=nullptr;
     if(p_GetVoidPointer(const_cast<NVSDK_NGX_Parameter*>(params),"DLSSG.Backbuffer",&bb)==NGX_Success && bb)
       isDlssg=true;
+  }
+  // Readback: what the driver's DLSS-G feature is actually told about the motion-vector scale
+  // (after Streamline's multiply by the mvec extent). Expected -1,-1 for BG3 (PureDark's recipe).
+  if(isDlssg && p_GetF){
+    static float lastX=0.f, lastY=0.f; static int logged=0;
+    float sx=0.f, sy=0.f; auto* pp=const_cast<NVSDK_NGX_Parameter*>(params);
+    if(p_GetF(pp,"DLSSG.MvecScaleX",&sx)==NGX_Success && p_GetF(pp,"DLSSG.MvecScaleY",&sy)==NGX_Success){
+      if((sx!=lastX || sy!=lastY) && logged<5){ logged++; lastX=sx; lastY=sy;
+        Log("DLSS-G receives MvecScale=(%.4f,%.4f) at the driver (mvec %ux%u, ini MvecScaleNormalized=%d)",
+            sx, sy, g_in.mvecW, g_in.mvecH, (int)Cfg().mvecScaleNormalized); }
+    }
   }
   if(!isDlssg && params){
     ReadFrameInputs(params);

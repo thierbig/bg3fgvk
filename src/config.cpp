@@ -47,6 +47,9 @@ static void WriteDefaults(const char* path){
     "TagHUDLess=1\n"
     "; Feed a fully transparent UI color+alpha layer (0 = none)\n"
     "TagUI=0\n"
+    "; Motion-vector scale handed to Streamline: 1 = the game's DLSS scale divided by the motion-vector buffer size\n"
+    "; (Streamline multiplies it back by that size before DLSS-G sees it). 0 = raw values, 1500x too large; A/B only.\n"
+    "MvecScaleNormalized=1\n"
     "; DLSS-G turns on after this many consecutive frames with a DLSS-SR evaluate (world rendering)\n"
     "OnAfterEvalFrames=60\n"
     "; ...and suspends after this many presents without one (menu / loading screen / video)\n"
@@ -68,6 +71,7 @@ void LoadConfig(){
   c.reflexSleep = GetPrivateProfileIntA("fgvk","ReflexSleep",c.reflexSleep?1:0,path)!=0;
   c.tagHudless  = GetPrivateProfileIntA("fgvk","TagHUDLess",c.tagHudless?1:0,path)!=0;
   c.tagUI       = GetPrivateProfileIntA("fgvk","TagUI",c.tagUI?1:0,path)!=0;
+  c.mvecScaleNormalized = GetPrivateProfileIntA("fgvk","MvecScaleNormalized",c.mvecScaleNormalized?1:0,path)!=0;
   c.onAfterEvalFrames  = (uint32_t)GetPrivateProfileIntA("fgvk","OnAfterEvalFrames",(int)c.onAfterEvalFrames,path);
   c.offAfterIdleFrames = (uint32_t)GetPrivateProfileIntA("fgvk","OffAfterIdleFrames",(int)c.offAfterIdleFrames,path);
   if(c.onAfterEvalFrames<1) c.onAfterEvalFrames=1; if(c.offAfterIdleFrames<1) c.offAfterIdleFrames=1;
@@ -77,8 +81,8 @@ void LoadConfig(){
   c.keyCycleFrames = key("KeyCycleFrames", c.keyCycleFrames);
   g_cfg=c;
   g_rt.frames = c.dlssgFrames; g_rt.fgUserOff = false;
-  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x",
-      path, c.dlssgFrames, c.dlssgFrames+1, c.reflexMode, (int)c.reflexSleep, (int)c.tagHudless, (int)c.tagUI, c.onAfterEvalFrames, c.offAfterIdleFrames,
+  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d MvecScaleNormalized=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x",
+      path, c.dlssgFrames, c.dlssgFrames+1, c.reflexMode, (int)c.reflexSleep, (int)c.tagHudless, (int)c.tagUI, (int)c.mvecScaleNormalized, c.onAfterEvalFrames, c.offAfterIdleFrames,
       c.keyToggleFG, c.keyCycleFrames);
 }
 }
