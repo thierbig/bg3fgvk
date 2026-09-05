@@ -56,35 +56,19 @@ FG stats: 300 presents -> 1200 frames displayed (x4.00) status=0
 cannot see generated frames; use the NVIDIA App or Steam overlay. `x1.00` while playing: see
 Troubleshooting.
 
-## Configuration: `bin\NativeMods\fgvk.ini`
-
-Read once at game start.
-
-| Key | Default | What it does |
-|---|---|---|
-| `DLSSGFrames` | `3` | Generated frames per rendered frame: `1` = x2, `2` = x3, `3` = x4. Clamped to what the GPU supports. |
-| `ReflexMode` | `2` | NVIDIA Reflex, required by DLSS-G. `1` = Low Latency, `2` = Low Latency + Boost. `0` = off (no frame generation). |
-| `ReflexSleep` | `1` | Keep at `1`. |
-| `TagHUDLess` | `1` | Feeds the pre-UI image to DLSS-G so the HUD does not smear. Keep at `1`. |
-| `TagUI` | `0` | Experimental. Leave at `0`. |
-| `OnAfterEvalFrames` | `60` | Frames of 3D rendering before frame generation switches on. |
-| `OffAfterIdleFrames` | `30` | Frames without 3D rendering before it suspends. |
-| `KeyToggleFG` | `0x6A` | Hotkey: frame generation on/off. `0x6A` = numpad `*`. `0` disables. |
-| `KeyCycleFrames` | `0x23` | Hotkey: cycle x2, x3, x4. `0x23` = `End`. |
-
-Hotkeys use Windows virtual-key codes, decimal or hex.
-
-**NVIDIA App override.** A per-game *DLSS Override, Frame Generation* setting for Baldur's Gate 3
-in the NVIDIA App (for example "4x") pins the multiplier, and `DLSSGFrames` and the `End` key
-appear to do nothing. Set it to "Use 3D application setting" to let the mod decide. It works
-either way.
-
 ## Hotkeys
 
 | Key | Action |
 |---|---|
 | Numpad `*` | Frame generation on / off |
-| `End` | Cycle x2, x3, x4 (see the NVIDIA App note above) |
+| `End` | Cycle x2, x3, x4 |
+
+If the NVIDIA App has a per-game *DLSS Override, Frame Generation* setting for Baldur's Gate 3
+(for example "4x"), it pins the multiplier and `End` appears to do nothing. Set it to "Use 3D
+application setting" to let the mod decide. It works either way.
+
+Advanced settings (multiplier, Reflex mode, hotkeys) live in `bin\NativeMods\fgvk.ini`, written
+with defaults on first launch and documented in [BUILD.md](BUILD.md).
 
 ## What to expect
 
@@ -112,7 +96,7 @@ Diagnostics are `bin\fgvk.log` (this mod) and `bin\sl.log` (Streamline).
 
 - **`FG stats` shows `x1.00` while playing.** No `gate: ... DLSS-G ON` line means the game is not
   running DLSS: enable it in Video settings. BG3 silently drops the DLSS setting after a failed
-  init, so re-select it. `status=2` means Reflex is off (`ReflexMode` 1 or 2); `status=1` means
+  init, so re-select it. `status=2` means Reflex is off (`ReflexMode` in `fgvk.ini` must be 1 or 2); `status=1` means
   the resolution is too low. The window must have focus.
 - **The game does not start, or the log stops after `slInit`.** Streamline files missing from
   `bin\NativeMods\Streamline\` or mixed from two versions, or Hardware-accelerated GPU scheduling
