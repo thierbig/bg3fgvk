@@ -85,3 +85,56 @@ recomposition inside DLSS-G.
 3. Locate the log file at `C:\Games\Baldurs Gate 3\bin\fgvk.log`.
 4. Read the `slInit`, `slSetVulkanInfo`, `slDLSSGSetOptions`, and **`DLSSG status=`** lines.
 5. Record findings in `docs/M1-result.md`.
+
+## The Streamline runtime folder
+
+DLSS Frame Generation itself is NVIDIA code. It ships as the **Streamline SDK runtime**, seven
+files that bg3fgvk bundles unmodified (version 2.12.0) in `bin\NativeMods\Streamline\`:
+
+```
+sl.interposer.dll     Streamline core: takes over the Vulkan swapchain
+sl.common.dll         shared plugin infrastructure
+sl.dlss_g.dll         the DLSS Frame Generation plugin
+sl.pcl.dll            PC latency markers
+sl.reflex.dll         NVIDIA Reflex (required by frame generation)
+nvngx_dlssg.dll       the frame generation neural network
+NvLowLatencyVk.dll    Reflex helper for Vulkan
+STREAMLINE-LICENSE.txt, README-STREAMLINE.txt
+```
+
+- **Leave the folder where it is**, next to `fgvk.dll`. `fgvk.dll` loads Streamline from there
+  and tells it to look for its plugins there, so these files never conflict with copies another
+  mod may have dropped into `bin\`.
+- All seven must always come from the same Streamline release. Never mix files from two
+  versions.
+- **Updating Streamline:** download `streamline-sdk-vX.Y.Z.zip` from
+  <https://github.com/NVIDIA-RTX/Streamline/releases>, open its `bin\x64\` folder (not
+  `bin\x64\development\`, those are debug builds with an overlay) and replace all seven files
+  in `bin\NativeMods\Streamline\` with the new ones.
+- If the folder is missing, `fgvk.dll` falls back to looking for the same seven files next to
+  `bg3.exe` and says so in `fgvk.log`.
+
+## How it works (short version)
+
+1. `fgvk.dll` is loaded by Native Mod Loader at startup and hooks `vkGetInstanceProcAddr`. The
+   game builds its entire Vulkan dispatch through NVIDIA's `sl.interposer.dll`, so Streamline
+   owns the device, the queues and the swapchain exactly as in a native integration.
+2. It hooks the NGX call the game makes for DLSS Super Resolution and reads the depth buffer,
+   motion vectors, jitter and the upscaled pre-UI image out of it. Those are tagged for DLSS-G
+   every frame together with the camera constants.
+3. Streamline's DLSS-G plugin generates the intermediate frames and paces their presentation
+   in the driver. The mod's present hook only carries the Reflex/PCL frame markers and decides
+   when frame generation should be on (3D world rendering) or suspended (menus, loading).
+4. The exported `vkGetDeviceProcAddr` and swapchain functions of `vulkan-1.dll` are routed
+   through the same view the game gets, so other mods that hook Vulkan (the Script Extender's
+   ImGui overlay) see the presented frames and never run on Streamline's internal threads.
+
+Details for developers are in `BUILD.md` and `docs/`.
+
+## Release packaging
+
+`package.ps1 -Version vX.Y.Z [-Build]` assembles `dist\bg3fgvk-vX.Y.Z.zip` laid out like the
+game's `bin\` folder: `NativeMods\fgvk.dll`, `NativeMods\Streamline\` (the seven files from
+`redist\`), README, INSTALL.txt and LICENSE. `fgvk-stack.exe` is deliberately not shipped.
+Microsoft Detours and the Vulkan headers are expected where `CMakeLists.txt` points
+(`External/` of a sibling checkout).
