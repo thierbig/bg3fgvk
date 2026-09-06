@@ -36,10 +36,14 @@ turns it off and on. That is all.
 
 | | |
 |---|---|
-| GPU | NVIDIA RTX 40 series for x2. RTX 50 series for x3 and x4 (multi frame generation). |
+| GPU | NVIDIA RTX 40 series for x2 (x3 / x4 possible, see below). RTX 50 series for x3 and x4. |
 | Game | Baldur's Gate 3 in **Vulkan** mode (the default `bg3.exe`, not DirectX 11). |
 | In-game | **DLSS enabled** in Video settings (any quality, or DLAA). With DLSS off the mod stays idle. |
 | Loader | [Native Mod Loader](https://www.nexusmods.com/baldursgate3/mods/944) (the `bink2w64.dll` replacement). |
+
+**RTX 40 series:** NVIDIA caps Ada at x2, but the community
+[MFG Ada Unlock](https://github.com/mavismmg/MFGAdaUnlock-RenoDx) (a ReShade add-on) lifts that cap; with it
+installed, set `DLSSGFrames=3` in `fgvk.ini` for x4. Reported working in BG3 on Vulkan: 60 fps in, 240 out.
 
 ## Checking that it works
 
