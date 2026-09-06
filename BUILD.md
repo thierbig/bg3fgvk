@@ -26,7 +26,6 @@ loads every DLL in `bin\NativeMods\` at startup.
 2. The Streamline runtime (exactly the seven files in `redist\`, Streamline 2.12.0) goes in
    `bin\NativeMods\Streamline\`; fgvk loads the interposer from there and points Streamline's
    plugin search at that folder. Fallback: the same seven files next to `bg3.exe`.
-3. Run WITHOUT PureDark's `upscaler.dll` (parked as `upscaler.dll.parked`).
 
 ## Logs
 
