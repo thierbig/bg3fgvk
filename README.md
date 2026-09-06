@@ -84,8 +84,8 @@ bg3fgvk runs together with DLSS 5 through the
 [OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR) fork of OptiScaler. OptiScaler
 passes the game's DLSS call through to the driver and runs the Neural Rendering model over the
 upscaled image; bg3fgvk reads that same call, so the generated frames carry the result. RTX 50
-series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself. Setup and the ini keys that
-matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
+series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself (the RenoDX Discord distributes
+it with its DLSS 5 add-on). Setup and the ini keys that matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
 
 ![DLSS 5 Neural Rendering and DLSS Frame Generation x4 together in the Shattered Sanctum: 245 fps displayed (top right), DLSS-G indicator top left, DLSS and Neural Rendering indicators bottom left](docs/images/dlss5-fg-x4-shattered-sanctum.png)
 

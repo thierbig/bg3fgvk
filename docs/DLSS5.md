@@ -25,8 +25,13 @@ development; check its release notes.
 ### Requirements
 
 - An **RTX 50 series** card. The Neural Rendering model does not run on older GPUs.
-- `nvngx_dlssnr.dll`, NVIDIA's model DLL (about 165 MB, "NVIDIA DLSSNR" in its file properties).
-  It comes from an NVIDIA driver package. Neither the fork nor bg3fgvk ships it.
+- `nvngx_dlssnr.dll`, NVIDIA's model DLL (about 165 MB, version 310.8.0, "NVIDIA DLSSNR" in its
+  file properties). It is NVIDIA's and neither the fork nor bg3fgvk ships it. **Where to get it:**
+  the [RenoDX](https://github.com/clshortfuse/renodx) Discord, where the DLSS 5 add-on is distributed
+  together with this DLL; that is where the copy used here came from. NVIDIA drivers that ship
+  DLSS 5 are expected to carry it in the driver store next to `nvngx_dlssg.dll` (the 610.88 driver
+  used here did not). Check the file properties: a 165 MB file named `nvngx_dlssd.dll` is this
+  model misnamed, not Ray Reconstruction.
 - The fork's notes ask for driver 616.56 or newer. The stock 310.8.0 model also ran here on 610.88.
 - bg3fgvk installed and working first (`x4.00` in `fgvk.log`).
 
