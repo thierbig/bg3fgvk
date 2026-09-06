@@ -9,6 +9,8 @@ Both run at once: OptiScaler passes the game's DLSS Super Resolution call throug
 runs the Neural Rendering model over the upscaled image in place, and bg3fgvk reads that same call for
 frame generation. The generated frames carry the Neural Rendering result too.
 
+![DLSS 5 Neural Rendering and DLSS Frame Generation x4 together in the Shattered Sanctum: 245 fps displayed (top right), DLSS-G indicator top left, DLSS and Neural Rendering indicators bottom left](images/dlss5-fg-x4-shattered-sanctum.png)
+
 ![DLSS 5 Neural Rendering on a character close-up with DLSS Frame Generation x4 running](images/dlss5-neural-rendering-closeup.png)
 
 Verified on 2026-09-04 with an RTX 5070 Ti, driver 610.88, 2560x1440, DLSS-G x4. NVIDIA's own

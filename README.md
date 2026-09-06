@@ -87,6 +87,8 @@ upscaled image; bg3fgvk reads that same call, so the generated frames carry the 
 series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself. Setup and the ini keys that
 matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
 
+![DLSS 5 Neural Rendering and DLSS Frame Generation x4 together in the Shattered Sanctum: 245 fps displayed (top right), DLSS-G indicator top left, DLSS and Neural Rendering indicators bottom left](docs/images/dlss5-fg-x4-shattered-sanctum.png)
+
 ![DLSS 5 Neural Rendering on a character close-up with DLSS Frame Generation x4 running](docs/images/dlss5-neural-rendering-closeup.png)
 
 ## Troubleshooting
