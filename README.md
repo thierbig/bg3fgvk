@@ -84,9 +84,8 @@ bg3fgvk runs together with DLSS 5 through the
 [OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR) fork of OptiScaler. OptiScaler
 passes the game's DLSS call through to the driver and runs the Neural Rendering model over the
 upscaled image; bg3fgvk reads that same call, so the generated frames carry the result. RTX 50
-series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself. Setup, the ini keys that
-matter and the known issue (do not open OptiScaler's menu while frame generation is on) are in
-**[docs/DLSS5.md](docs/DLSS5.md)**.
+series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself. Setup and the ini keys that
+matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
 
 ![DLSS 5 Neural Rendering on a character close-up with DLSS Frame Generation x4 running](docs/images/dlss5-neural-rendering-closeup.png)
 
@@ -103,7 +102,7 @@ Diagnostics are `bin\fgvk.log` (this mod) and `bin\sl.log` (Streamline).
   is off.
 - **Black screen or freeze.** Another mod that hooks Vulkan (an overlay, another frame generator)
   is the usual cause; `sl.log` shows `WaitSemaphores ... timed out` right before the stall.
-  OptiScaler's menu with frame generation on is a known case, see [docs/DLSS5.md](docs/DLSS5.md).
+  OptiScaler's menu with frame generation on froze the game in bg3fgvk 0.1.0; 1.0.0 fixes it.
   Attach both logs to a report.
 - **Script Extender mods stop drawing their UI.** Not expected; report it with the logs.
 

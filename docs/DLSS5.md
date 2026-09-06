@@ -46,7 +46,7 @@ development; check its release notes.
 | `[DlssNr]` | `Enabled` | `true` | Turns Neural Rendering on without opening the menu. |
 | `[Spoofing]` | `StreamlineSpoofing` | `false` | Otherwise Streamline can be shown a spoofed RTX 4090 and cap frame generation at x2. |
 | `[Spoofing]` | `Dxgi` | `false` | No spoofing on an NVIDIA GPU. |
-| `[Menu]` | `OverlayMenu` | `false` | Recommended, see the known issue below. Everything is set from the ini anyway. |
+| `[Menu]` | `OverlayMenu` | your choice | With bg3fgvk 1.0.0 or newer the OptiScaler menu (`Insert`) works with frame generation on. On bg3fgvk 0.1.0 it froze the game; set `false` there. |
 
 5. Launch the game and load a save. `bin\OptiScaler.log` (file logging is on in the fork's ini)
    shows `DLSS-NR Vulkan: the model initialised on this device`. `bin\fgvk.log` still shows
@@ -60,14 +60,13 @@ roughly halved the rendered frame rate; with x4 frame generation the displayed r
 `WorkingScale` under `[DlssNr]` (for example `0.75`) runs the model smaller to win some of that
 back. The fork's ini and readme document the other knobs.
 
-### Known issue: the OptiScaler menu freezes the game while frame generation is on
+### The OptiScaler menu and bg3fgvk 0.1.0
 
-OptiScaler's overlay hooks the driver's present call underneath Streamline. With the menu open it
-injects GPU work and fence waits on Streamline's frame-pacing thread, and DLSS-G deadlocks: no
-crash dump, the game just stops. Either keep `OverlayMenu=false` and configure through the ini, or
-suspend frame generation with Numpad `*` before pressing `Insert` and turn it back on after closing
-the menu. The boot-screen menu is safe because frame generation is not running there. A fix on the
-bg3fgvk side is being looked at.
+With bg3fgvk 0.1.0, opening the OptiScaler menu while frame generation was on froze the game: the
+overlay had hooked the driver's present call underneath Streamline and injected GPU work and fence
+waits on Streamline's frame-pacing thread. bg3fgvk 1.0.0 routes such hooks above frame generation,
+on the game thread, so the menu now draws normally with x4 running. If you are still on 0.1.0, keep
+`OverlayMenu=false` or suspend frame generation with Numpad `*` before pressing `Insert`.
 
 ### Removing it
 
