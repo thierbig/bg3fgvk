@@ -78,6 +78,18 @@ menu freeze). fgvk therefore also detours the exported `vkCreateDevice`, attache
 game's view (`exportroute.h`, unit-tested). `fgvk.log` prints `export vkGetDeviceProcAddr(...) inside
 loader vkCreateDevice (third-party hook) -> game view` when it happens.
 
+Streamline itself becomes a third-party caller under Wine, by accident. There `vulkan-1.dll` is a
+forwarder into `winevulkan`, which serves its device dispatch table from the SAME addresses it
+exports, so Streamline's table points at the four detours above. `sl.common` then issues
+`vkGetSwapchainImagesKHR` from inside DLSS-G's swapchain clone, is handed the game's view, and
+re-enters that clone before it has filled its proxy buffers: an empty vector, a NULL fallback and a
+faulting read in `sl.dlss_g`, about two seconds into the world. The re-entry guard cannot catch it,
+because the game resolves through GIPA and never enters these hooks, so no re-entry scope is ever
+pushed. fgvk therefore routes callers that are Streamline itself - `sl.*`, `nvngx_dlssg` and
+`NvLowLatencyVk`, matched on the module file name in `slmodule.h`, unit-tested - straight to the
+loader on the three swapchain exports. The Khronos loader on Windows keeps lookup and dispatch
+apart, so this only reproduces under Wine/Proton.
+
 ## NVIDIA App overrides
 
 The NVIDIA App applies BG3's per-game DLSS overrides to fgvk's Streamline instance (the on-screen

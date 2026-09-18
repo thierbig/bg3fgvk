@@ -81,6 +81,28 @@ with defaults on first launch and documented in [BUILD.md](BUILD.md).
 - It pauses when the window loses focus, on loading screens and in videos, and resumes by itself.
 - Very fast camera pans can show light smearing. That is the technique, not a bug.
 
+## Running under Wine / Proton (Linux)
+
+bg3fgvk runs on Linux through Proton. Earlier versions crashed a second or two into the world,
+in `sl.dlss_g.dll` during swapchain setup; this release fixes it. The cause was Wine-specific:
+Proton's `vulkan-1.dll` forwards into `winevulkan`, which serves its Vulkan dispatch table from
+the same addresses it exports, so hooking those exports in place made Streamline re-enter the
+mod's own hooks and read half-built state. The fix routes Streamline's own export calls to the
+loader, as the Windows loader already does; on Windows those addresses differ, which is why it
+only ever crashed under Wine.
+
+Set the mod up exactly as on Windows (Native Mod Loader, the Streamline runtime, DLSS on in Video
+settings) on a current Proton and NVIDIA driver. The two things DLSS-G needs beyond that are
+normally handled for you, so no registry edits are required:
+
+- **Hardware GPU scheduling.** Proton reports this to the driver over D3DKMT automatically for
+  NVIDIA GPUs. (Plain Wine and Wine-Staging do not, and a few titles that read the registry
+  directly still want a `HwSchMode` key, but Baldur's Gate 3 on Proton needs neither.)
+- **Reflex**, which DLSS-G requires. A recent NVIDIA driver loads the Vulkan Reflex path on its
+  own. If frame generation stays idle and `sl.log` shows `status=2` (Reflex off), add
+  `DXVK_NVAPI_VKREFLEX=1` to the game's Steam launch options to load Proton's DXVK-NVAPI Reflex
+  layer.
+
 ## DLSS 5 Neural Rendering (optional)
 
 bg3fgvk runs together with DLSS 5 through the

@@ -1,11 +1,13 @@
 #include "vkhooks.h"
 #include "exportroute.h"
+#include "slmodule.h"
 #include "log.h"
 #include "slboot.h"
 #include "inputs.h"
 #include "config.h"
 #include <windows.h>
 #include <detours.h>
+#include <intrin.h>
 #include <cstring>
 #include <cstdio>
 #include <atomic>
@@ -368,17 +370,31 @@ template <typename F> static F GameView(const char* name, F& cache, VkDevice dev
   if(!cache && ip_GDPA){ cache = (F)w_GetDeviceProcAddr(dev, name); }
   return cache;
 }
+// Streamline's own device table aliases these detours on Wine: vulkan-1 there forwards into
+// winevulkan, which serves that table from the SAME addresses it exports. sl.common's
+// vkGetSwapchainImagesKHR - issued from inside DLSS-G's swapchain clone - therefore arrives
+// here, takes the game's view, and re-enters the clone, which reads a proxy vector it has not
+// filled yet: an empty vector, a NULL fallback, and a faulting read (sl.dlss_g+0x55C35).
+// ForceReal cannot see it - the game resolves through GIPA and never enters these hooks, so no
+// re-entry scope is ever pushed. The Khronos loader keeps lookup and dispatch apart, which is
+// why this never reproduces on Windows.
+static inline bool CallerIsStreamline(void* ra){
+  HMODULE m{}; char path[MAX_PATH]{};
+  GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)ra,&m);
+  GetModuleFileNameA(m, path, MAX_PATH);
+  return IsStreamlineModule(path);
+}
 static VKAPI_ATTR VkResult VKAPI_CALL h_GetSwapchainImagesKHRExport(VkDevice d, VkSwapchainKHR sc, uint32_t* n, VkImage* imgs){
-  static PFN_vkGetSwapchainImagesKHR gv{}; PFN_vkGetSwapchainImagesKHR f = ForceReal() ? nullptr : GameView("vkGetSwapchainImagesKHR", gv, d);
+  static PFN_vkGetSwapchainImagesKHR gv{}; PFN_vkGetSwapchainImagesKHR f = (ForceReal() || CallerIsStreamline(_ReturnAddress())) ? nullptr : GameView("vkGetSwapchainImagesKHR", gv, d);
   static bool logged=false; if(f && !logged){ logged=true; Log("export vkGetSwapchainImagesKHR from tid=%lu routed to the game's (fake-buffer) view", (unsigned long)GetCurrentThreadId()); }
   return f ? f(d,sc,n,imgs) : o_GetSwapchainImagesKHR_export(d,sc,n,imgs);
 }
 static VKAPI_ATTR VkResult VKAPI_CALL h_AcquireNextImageKHRExport(VkDevice d, VkSwapchainKHR sc, uint64_t t, VkSemaphore s, VkFence fe, uint32_t* idx){
-  static PFN_vkAcquireNextImageKHR gv{}; PFN_vkAcquireNextImageKHR f = ForceReal() ? nullptr : GameView("vkAcquireNextImageKHR", gv, d);
+  static PFN_vkAcquireNextImageKHR gv{}; PFN_vkAcquireNextImageKHR f = (ForceReal() || CallerIsStreamline(_ReturnAddress())) ? nullptr : GameView("vkAcquireNextImageKHR", gv, d);
   return f ? f(d,sc,t,s,fe,idx) : o_AcquireNextImageKHR_export(d,sc,t,s,fe,idx);
 }
 static VKAPI_ATTR VkResult VKAPI_CALL h_QueuePresentKHRExport(VkQueue q, const VkPresentInfoKHR* pi){
-  static PFN_vkQueuePresentKHR gv{}; PFN_vkQueuePresentKHR f = (ForceReal() || !gDevice) ? nullptr : GameView("vkQueuePresentKHR", gv, gDevice);
+  static PFN_vkQueuePresentKHR gv{}; PFN_vkQueuePresentKHR f = (ForceReal() || !gDevice || CallerIsStreamline(_ReturnAddress())) ? nullptr : GameView("vkQueuePresentKHR", gv, gDevice);
   return f ? f(q,pi) : o_QueuePresentKHR_export(q,pi);
 }
 
