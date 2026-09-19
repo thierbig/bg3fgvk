@@ -25,11 +25,9 @@ The fork is a closed-source pre-release. Single-player only.
 - A recent NVIDIA driver (the fork's kernels want roughly R580 or newer).
 - bg3fgvk installed as in the [README quick start](../README.md#quick-start): Vulkan renderer,
   DLSS on in Video settings, Hardware-accelerated GPU scheduling on.
-- No other frame generation mod (OptiScaler frame generation, dlssg-to-fsr3, ...).
-- Not ShyVortex's OptiScaler fork's RTX 20 / 30 unlock either: it loads an older sdli1995 build
-  (`OptiScaler\dlssg_sm86\dlssg_sm86.dll`, "Native 0.2.3") that only launches its kernels through
-  DirectX 12 and contains no Vulkan code, so it cannot work in BG3 and would compete with the fork.
-  Delete that `dlssg_sm86` folder for this test.
+- No other frame generation mod (OptiScaler frame generation, dlssg-to-fsr3, ...). That includes
+  the [optional OptiScaler test](#optional-second-test-shyvortexs-optiscaler-expected-to-fail)
+  below: run one test at a time, never both unlockers together.
 
 ## Install
 
@@ -57,13 +55,39 @@ To uninstall, delete `version.dll` and `dlssg_sm86.ini` from `bin\`.
 | `dlssg3109.log` | `vulkan_kernel_launches` | Frame generation kernels are actually running on the card. |
 | `bin\fgvk.log` | `FG stats: ... (x1.00)` with no `DLSS-G ON` line | The game is not running DLSS. Re-select DLSS in Video settings (BG3 drops it after a failed start). |
 
+## Optional second test: ShyVortex's OptiScaler (expected to fail)
+
+[ShyVortex's OptiScaler fork](https://github.com/ShyVortex/OptiScaler-DLSSNR-PreSR-Multipass)
+also has an RTX 20 / 30 unlock. **It will most likely not work in BG3**: the unlocker it ships
+(`OptiScaler\dlssg_sm86\dlssg_sm86.dll`, sdli1995's older "Native 0.2.3" build) launches its kernels
+only through DirectX 12 and contains no Vulkan code. It is listed so that a quick run can confirm
+or rule it out. Do the SilyNoMeta test above first.
+
+1. Remove the SilyNoMeta fork: delete `version.dll` and `dlssg_sm86.ini` from `bin\`.
+2. Download **OptiScaler-NR-v0.9.6.zip** from the
+   [release page](https://github.com/ShyVortex/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.9.6)
+   and extract everything into `bin\`, next to `bg3.exe`.
+3. Rename `OptiScaler.dll` to **`dxgi.dll`** (`bg3.exe` loads dxgi; it does not load winmm).
+4. In `bin\OptiScaler.ini` set:
+   - `[DLSSG]` `AmpereMfgUnlock=true` (the RTX 20 / 30 unlock, off by default).
+   - `[Upscalers]` `VulkanUpscaler=dlss`. Otherwise OptiScaler swaps the game's DLSS for FSR and
+     bg3fgvk has nothing to read.
+5. Keep `DLSSGFrames=1` in `fgvk.ini`, launch, and play about 30 seconds as before.
+
+Check `bin\OptiScaler.log` for `AmpereMfgLoader: SM86/SM75 MFG loaded successfully`, then the same
+`fgvk.log` and `sl.log` lines as in the table above. Expect `FG stats: ... (x1.00)` or a crash; an
+`x2.00` would be a surprise worth reporting. To uninstall, delete what the zip added (`dxgi.dll`,
+`OptiScaler.ini`, the `OptiScaler\` folder and the other extracted files).
+
 ## Reporting
 
-Post in [issue #1](https://github.com/thierbig/bg3fgvk/issues/1): GPU model, driver version, and
-the three logs (`bin\fgvk.log`, `bin\sl.log`, `dlssg3109.log`), even when it works. A word on how it
-looks helps too: HUD stability, fast camera pans, and x3 / x4 if you tried them.
+Post in [issue #1](https://github.com/thierbig/bg3fgvk/issues/1): which test (SilyNoMeta or
+OptiScaler), GPU model, driver version, and the logs (`bin\fgvk.log`, `bin\sl.log`, plus
+`dlssg3109.log` or `bin\OptiScaler.log`), even when it works. A word on how it looks helps too:
+HUD stability, fast camera pans, and x3 / x4 if you tried them.
 
 ## Credits
 
 - sdli1995, for `dlssg_for_sm86` and the Ampere kernels.
 - SilyNoMeta, for the fork's Vulkan path.
+- ShyVortex, for the OptiScaler fork with the RTX 20 / 30 unlock.
