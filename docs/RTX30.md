@@ -26,6 +26,10 @@ The fork is a closed-source pre-release. Single-player only.
 - bg3fgvk installed as in the [README quick start](../README.md#quick-start): Vulkan renderer,
   DLSS on in Video settings, Hardware-accelerated GPU scheduling on.
 - No other frame generation mod (OptiScaler frame generation, dlssg-to-fsr3, ...).
+- Not ShyVortex's OptiScaler fork's RTX 20 / 30 unlock either: it loads an older sdli1995 build
+  (`OptiScaler\dlssg_sm86\dlssg_sm86.dll`, "Native 0.2.3") that only launches its kernels through
+  DirectX 12 and contains no Vulkan code, so it cannot work in BG3 and would compete with the fork.
+  Delete that `dlssg_sm86` folder for this test.
 
 ## Install
 
@@ -47,7 +51,10 @@ To uninstall, delete `version.dll` and `dlssg_sm86.ini` from `bin\`.
 | `bin\fgvk.log` | `gate: 60 consecutive DLSS-SR frames -> DLSS-G ON`, then `FG stats: ... (x2.00)` | **It works.** Press `End` for x3 and x4 and check `FG stats` again. |
 | `bin\fgvk.log` | `OnDeviceCreated: feature function resolution failed` | Streamline dropped frame generation. Check `sl.log` below. |
 | `bin\sl.log` | `Ignoring plugin 'sl.dlss_g' since it is not supported on this platform` | The fork did not reach bg3fgvk's Streamline, which lives in `bin\NativeMods\Streamline\` rather than next to `bg3.exe`. Probably fixable on bg3fgvk's side; the logs show how. |
-| `dlssg3109.log` (the fork's log, look next to `bg3.exe`) | `proxy_attached` / `installed_310_9_1` | The fork loaded / took over the frame generation runtime. |
+| `dlssg3109.log` (the fork's log, look next to `bg3.exe`) | `proxy_attached` | The fork loaded. |
+| `dlssg3109.log` | `installed_310_9_1` | It replaced the frame generation runtime with its RTX 30 build. |
+| `dlssg3109.log` | `vulkan_backend_active` | Its Vulkan path is on (the part the original `dlssg_for_sm86` lacks). |
+| `dlssg3109.log` | `vulkan_kernel_launches` | Frame generation kernels are actually running on the card. |
 | `bin\fgvk.log` | `FG stats: ... (x1.00)` with no `DLSS-G ON` line | The game is not running DLSS. Re-select DLSS in Video settings (BG3 drops it after a failed start). |
 
 ## Reporting
