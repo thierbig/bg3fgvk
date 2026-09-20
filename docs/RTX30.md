@@ -37,10 +37,12 @@ The fork is a closed-source pre-release. Single-player only.
    `bg3.exe` loads `version.dll` at startup, before bg3fgvk sets up Streamline. If `bin\` already
    has a `version.dll` from another mod, do not overwrite it: say so in the issue. The optional
    `DLSSGControls.addon64` (a ReShade panel) is not needed.
-3. Rename `bin\NativeMods\Streamline\nvngx_dlssg.dll` to `nvngx_dlssg.dll.off`. **This step comes
-   from the first RTX 30 reports** (see [What the first reports showed](#what-the-first-reports-showed)):
-   NGX loads that bundled copy by path, which shadows the driver's copy, and the driver's copy is
-   the one the fork replaces with its RTX 30 build. Put the name back to run bg3fgvk without the fork.
+3. Leave `bin\NativeMods\Streamline\nvngx_dlssg.dll` **in place**. An earlier version of this page
+   said to rename it away; a test on 2026-09-20 showed that breaks frame generation earlier, and the
+   reason is useful: that file is what answers Streamline's minimum-specification query, and it
+   answers `0x160`, which is what lets Streamline enable frame generation on an RTX 20 / 30 card at
+   all. Without it Streamline falls back to its own "RTX 40 or newer" default and switches frame
+   generation off during startup.
 4. In the NVIDIA App, under Graphics → Baldur's Gate 3 → DLSS Override, set **Frame Generation** to
    "Use 3D application setting". With the override on, Streamline loads NVIDIA's own override plugin
    from `C:\ProgramData\NVIDIA\NGX\models\` instead, which the fork does not appear to patch.
@@ -62,7 +64,8 @@ To uninstall, delete `version.dll` and `dlssg_sm86.ini` from `bin\`, and rename
 | `dlssg3109.log` | `vulkan_backend_active` | Its Vulkan path is on (the part the original `dlssg_for_sm86` lacks). |
 | `dlssg3109.log` | `vulkan_kernel_launches` | Frame generation kernels are actually running on the card. |
 | `bin\fgvk.log` | `FG stats: ... (x1.00)` with no `DLSS-G ON` line | The game is not running DLSS. Re-select DLSS in Video settings (BG3 drops it after a failed start). |
-| `bin\sl.log` | `m_gpuArch = 0x170`, then `vkCreateCuModuleNVX() for Kernel_... failed -3` and `NGX create feature failed 0xbad00002` | NVIDIA's stock RTX 40 / 50 kernels reached your card: the runtime in use is not the fork's. Check step 3 and attach `dlssg3109.log`. |
+| `bin\sl.log` | `m_gpuArch = 0x170`, then `vkCreateCuModuleNVX() for Kernel_... failed -3` and `NGX create feature failed 0xbad00002` | NVIDIA's stock RTX 40 / 50 kernels reached your card, so the fork's RTX 30 kernels are not the ones in use. Attach `dlssg3109.log`: if it has no `installed_310_9_1` line, the fork never replaced the runtime. |
+| `bin\sl.log` | `Failed to obtain DLSS-G min spec requirements from NGX, using SL defaults`, then `Disabling DLSS-G since it is not supported on current hardware` | `nvngx_dlssg.dll` is missing from `bin\NativeMods\Streamline\`. Put it back (step 3). |
 | `bin\sl.log` | `FeatureSupported == AdapterUnsupported`, then `Disabling DLSS-G since it is not supported on current hardware` | Streamline dropped frame generation before it ever ran. Check step 4, and that the fork loaded at all. |
 | `dlssg3109.log` missing entirely | The fork never loaded. Check that `bin\version.dll` is the fork's file and that no other mod owns that name. |
 
@@ -78,6 +81,16 @@ steps 3 and 4 existed. Neither included `dlssg3109.log`, so whether the fork was
   `sm_120`. `sl.log` shows NGX loading the runtime from `bin\NativeMods\Streamline/nvngx_dlssg.dll`,
   bg3fgvk's own bundled copy — hence step 3. Worth noting: NVIDIA's current snippet reported
   `Snippet expects at least : 0x160`, so the architecture gate was not the blocker here, only the kernels.
+- **RTX 3070 Ti again, 2026-09-20, with `nvngx_dlssg.dll` renamed away.** Worse, and instructive:
+  `getNGXFeatureRequirements` returned `ngxResult not implemented`, so Streamline logged `Failed to
+  obtain DLSS-G min spec requirements from NGX, using SL defaults` and disabled frame generation at
+  startup. That is why step 3 now says to leave the file alone. The fork's own `dlssg3109.log` was
+  attached for the first time and shows `proxy_attached` and super-resolution routing only: no
+  `installed_310_9_1`, no `vulkan_backend_active`, no `vulkan_kernel_launches`. So the fork attaches
+  to the process but never installs its RTX 30 frame generation runtime here. The same tester reports
+  a working setup using [RTX40MFG-Unlock](https://github.com/dashdogy/RTX40MFG-Unlock) (v1.3.3, which
+  has experimental RTX 30 and Vulkan support) instead of the fork, loaded through Ultimate ASI Loader
+  alongside bg3fgvk. That is unconfirmed by logs so far.
 - **RTX 3060, driver 616.56.** Streamline never got that far: NGX answered
   `FeatureSupported == AdapterUnsupported` for feature 11, `sl.dlss_g` was dropped at startup, and
   bg3fgvk logged `OnDeviceCreated: feature function resolution failed`. That machine had an NVIDIA
