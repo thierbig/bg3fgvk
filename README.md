@@ -36,7 +36,7 @@ turns it off and on. That is all.
 
 | | |
 |---|---|
-| GPU | NVIDIA RTX 40 series for x2 (x3 / x4 possible, see below). RTX 50 series for x3 and x4. RTX 20 / 30 being tested (see below). |
+| GPU | NVIDIA RTX 40 series for x2 (x3 / x4 possible, see below). RTX 50 series for x3 and x4. RTX 30 for x2 with one more mod (see below). |
 | Game | Baldur's Gate 3 in **Vulkan** mode (the default `bg3.exe`, not DirectX 11). |
 | In-game | **DLSS enabled** in Video settings (any quality, or DLAA). With DLSS off the mod stays idle. |
 | Loader | [Native Mod Loader](https://www.nexusmods.com/baldursgate3/mods/944) (the `bink2w64.dll` replacement). |
@@ -44,8 +44,9 @@ turns it off and on. That is all.
 **RTX 40 series:** NVIDIA caps Ada at x2. The community ReShade add-on
 [MFG Ada Unlock](https://github.com/mavismmg/MFGAdaUnlock-RenoDx) lifts it; then set `DLSSGFrames=3` for x4.
 
-**RTX 20 / 30 series (testing, not confirmed yet):** real DLSS frame generation may work through
-SilyNoMeta's `dlssg_for_sm86` fork, which adds the Vulkan path BG3 needs. Steps: **[docs/RTX30.md](docs/RTX30.md)**.
+**RTX 30 series:** x2 works, confirmed on an RTX 3070 Ti. NVIDIA's runtime has no kernels for these
+cards, so it needs [RTX30MFG-Unlock](https://github.com/mcsoderh/RTX30MFG-Unlock) alongside bg3fgvk.
+Steps and what to check in the logs: **[docs/RTX30.md](docs/RTX30.md)**.
 
 ## Checking that it works
 
