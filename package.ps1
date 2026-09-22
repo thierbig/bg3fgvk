@@ -71,6 +71,7 @@ Load a save. Frame generation starts by itself a couple of seconds into the worl
 Numpad * turns it off/on. Settings: bin\NativeMods\fgvk.ini (created on first launch).
 
 Requirements: RTX 40 (x2) or RTX 50 (x3/x4), Windows 10 20H1+, Hardware-accelerated GPU scheduling ON.
+RTX 30: x2 works with one more mod (RTX30MFG-Unlock); see docs/RTX30.md in the GitHub repository.
 Full guide, configuration and troubleshooting: README.md
 "@ | Set-Content -Encoding UTF8 "$stage\INSTALL.txt"
 
