@@ -22,9 +22,9 @@ This is unsupported research software on both sides. Single-player only.
 - An **RTX 30** card, a recent NVIDIA driver, and Windows **Hardware-accelerated GPU scheduling** on.
 - bg3fgvk installed as in the [README quick start](../README.md#quick-start), with the Vulkan
   renderer and **DLSS on** in Video settings.
-- Leave `bin\NativeMods\Streamline\nvngx_dlssg.dll` **in place**. It answers Streamline's
-  minimum-specification query with `0x160`, which is what lets frame generation arm on these cards.
-  Removing it makes Streamline disable frame generation during startup.
+- **Do not let another mod replace `bin\NativeMods\Streamline\nvngx_dlssg.dll`.** Other RTX 30 frame
+  generation mods work by substituting that file; with bg3fgvk it must stay as shipped, because it is
+  what tells Streamline your card is supported.
 - In the NVIDIA App, Graphics → Baldur's Gate 3 → DLSS Override → **Frame Generation** set to
   "Use 3D application setting". An active override loads NVIDIA's own plugins from the NGX model
   store instead, and one tester's card was refused frame generation that way.
@@ -65,7 +65,7 @@ videos and loading screens is normal: bg3fgvk suspends generation where the game
 | Log | Line | Meaning |
 |---|---|---|
 | `bin\sl.log` | `m_gpuArch = 0x170`, then `vkCreateCuModuleNVX() for Kernel_... failed -3` and `NGX create feature failed 0xbad00002` | NVIDIA's RTX 40 / 50 kernels reached your card, so the unlocker is not active. Check that the ASI loader really loaded it (step 3 and 4, and `global.ini`). |
-| `bin\sl.log` | `Failed to obtain DLSS-G min spec requirements from NGX, using SL defaults`, then `Disabling DLSS-G since it is not supported on current hardware` | `nvngx_dlssg.dll` is missing from `bin\NativeMods\Streamline\`. Put it back. |
+| `bin\sl.log` | `Failed to obtain DLSS-G min spec requirements from NGX, using SL defaults`, then `Disabling DLSS-G since it is not supported on current hardware` | `nvngx_dlssg.dll` is gone from `bin\NativeMods\Streamline\`, or another mod replaced it. Restore bg3fgvk's copy: it answers that query with `0x160`, and without an answer Streamline falls back to its own "RTX 40 or newer" default. |
 | `bin\sl.log` | `FeatureSupported == AdapterUnsupported`, then `Ignoring plugin 'sl.dlss_g'` | Streamline refused frame generation at startup. Turn the NVIDIA App DLSS Override off (Requirements). |
 | `bin\fgvk.log` | `slGetFeatureFunction(slDLSSGSetOptions) -> 31` and `OnDeviceCreated: feature function resolution failed` | Same as above: frame generation was never handed to bg3fgvk. |
 | `bin\fgvk.log` | `FG stats: ... (x1.00)` with no `DLSS-G ON` line | The game is not running DLSS. Re-select DLSS in Video settings; BG3 drops it after a failed start. |
