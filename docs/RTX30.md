@@ -1,7 +1,7 @@
 # DLSS Frame Generation on RTX 20 / 30
 
 Guide for the [bg3fgvk](../README.md) frame generation mod. **Confirmed on an RTX 3070 Ti**
-(driver 616.92, 2560x1440, DLSS Quality): x2 frame generation, verified from the logs in
+(2560x1440, DLSS Quality): **x2, x3 and x4** frame generation, verified from the logs in
 [issue #1](https://github.com/thierbig/bg3fgvk/issues/1). RTX 20 is untested; reports welcome.
 
 The generated frames are NVIDIA's own DLSS-G, not FSR.
@@ -25,17 +25,21 @@ This is unsupported research software on both sides. Single-player only.
 - **Do not let another mod replace `bin\NativeMods\Streamline\nvngx_dlssg.dll`.** Other RTX 30 frame
   generation mods work by substituting that file; with bg3fgvk it must stay as shipped, because it is
   what tells Streamline your card is supported.
-- In the NVIDIA App, Graphics → Baldur's Gate 3 → DLSS Override → **Frame Generation** set to
-  "Use 3D application setting". An active override loads NVIDIA's own plugins from the NGX model
-  store instead, and one tester's card was refused frame generation that way.
+- **Let the game control the frame generation multiplier.** In the NVIDIA App: Graphics → Baldur's
+  Gate 3 → DLSS Override → **Frame Generation** → "Use 3D application setting". In NVIDIA Profile
+  Inspector: **DLSS-MFG - Generation Factor** → application-controlled. A pinned setting makes
+  Streamline load NVIDIA's own override plugins (2.14.1) instead of bg3fgvk's, and on RTX 30 those
+  either refuse frame generation or cap it at x2. NVIDIA's separate DLSS-G *version* override
+  (for example "Latest DLL", 310.9.1) is fine to leave on; only the multiplier setting matters.
 
 ## Install
 
 Four components, all in the game's `bin\` folder (the one with `bg3.exe`):
 
 1. **Native Mod Loader** and **bg3fgvk**, as in the README quick start.
-2. In `bin\NativeMods\fgvk.ini`, set `DLSSGFrames=1` (x2). Higher multipliers are not confirmed
-   here, and RTX30MFG-Unlock's own notes report freezes above 2x.
+2. In `bin\NativeMods\fgvk.ini`, pick the multiplier: `DLSSGFrames=3` for x4, `2` for x3, `1` for
+   x2. All three work on the tested RTX 3070 Ti, and `End` cycles them in game. x4 costs the most
+   GPU time; if your rendered frame rate is low, x2 or x3 is the better trade.
 3. **[Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader)** (x64), renamed to
    **`version.dll`**, in `bin\`. `bg3.exe` imports `VERSION.dll` directly, so it loads early enough.
    Do not name it `bink2w64.dll`; Native Mod Loader owns that name.
@@ -54,10 +58,11 @@ Play about 30 seconds of the 3D world, then read `bin\fgvk.log`:
 slGetFeatureFunction(slDLSSGSetOptions) -> 0
 DLSSG status=0 framesMax=5
 gate: 60 consecutive DLSS-SR frames -> DLSS-G ON
-FG stats: 300 presents -> 600 frames displayed (x2.00) status=0
+FG stats: 300 presents -> 1200 frames displayed (x4.00) status=0
 ```
 
-`x2.00` is Streamline's own count of displayed frames per rendered frame. `x1.00` during menus,
+`x4.00` (or `x2.00`, `x3.00` for the lower settings) is Streamline's own count of displayed frames
+per rendered frame. `framesMax=5` means nothing is capping the multiplier. `x1.00` during menus,
 videos and loading screens is normal: bg3fgvk suspends generation where the game runs no DLSS.
 
 ## Troubleshooting
@@ -69,7 +74,8 @@ videos and loading screens is normal: bg3fgvk suspends generation where the game
 | `bin\sl.log` | `FeatureSupported == AdapterUnsupported`, then `Ignoring plugin 'sl.dlss_g'` | Streamline refused frame generation at startup. Turn the NVIDIA App DLSS Override off (Requirements). |
 | `bin\fgvk.log` | `slGetFeatureFunction(slDLSSGSetOptions) -> 31` and `OnDeviceCreated: feature function resolution failed` | Same as above: frame generation was never handed to bg3fgvk. |
 | `bin\fgvk.log` | `FG stats: ... (x1.00)` with no `DLSS-G ON` line | The game is not running DLSS. Re-select DLSS in Video settings; BG3 drops it after a failed start. |
-| — | Frozen image or black screen at x3 / x4 | Known above 2x. Keep `DLSSGFrames=1`. |
+| `bin\fgvk.log` | `DLSSG status=0 framesMax=1`, and `SetDLSSGeneration(1) frames=1` even after `End` requests x3 or x4 | An NVIDIA profile is pinning the multiplier, so Streamline caps it at x2 and bg3fgvk clamps to that ceiling. `sl.log` shows `Read SL_DLSS_OVERRIDE DRS key (app profile): 1` and `sl.dlss_g` version `2.14.1`. Set the multiplier back to application-controlled (Requirements). OptiScaler's spoofing settings are not the cause here. |
+| — | Frozen image or black screen at x3 / x4 | Drop to x2 (`DLSSGFrames=1` or `End`) and report it with logs; not seen on the tested card. |
 
 ## What does not work
 
