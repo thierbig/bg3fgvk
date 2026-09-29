@@ -4,10 +4,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(BG3SE "C:/Dev/bg3se-upscaler/External")
 add_library(fgvk SHARED
-  src/dllmain.cpp src/log.cpp src/config.cpp src/vkhooks.cpp src/slboot.cpp src/inputs.cpp)
+  src/dllmain.cpp src/log.cpp src/config.cpp src/vkhooks.cpp src/slboot.cpp src/inputs.cpp
+  src/mfg_transition_pin.cpp)
 target_include_directories(fgvk PRIVATE
   "${BG3SE}/VulkanSDK/Include" "${BG3SE}/streamline/include" "${BG3SE}/Detours/include" src)
-target_link_libraries(fgvk PRIVATE "${BG3SE}/Detours/lib.X64/detours.lib")
+target_link_libraries(fgvk PRIVATE "${BG3SE}/Detours/lib.X64/detours.lib" bcrypt)
 target_compile_definitions(fgvk PRIVATE VK_NO_PROTOTYPES WIN32_LEAN_AND_MEAN NOMINMAX)
 set_target_properties(fgvk PROPERTIES OUTPUT_NAME "fgvk")
 target_link_options(fgvk PRIVATE "/MAP:${CMAKE_BINARY_DIR}/fgvk.map")

@@ -48,10 +48,22 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `TagHUDLess` | 1 | feed the DLSS-SR output as HUD-less color (PureDark's recipe; 0 = backbuffer only) |
 | `TagUI` | 0 | feed a transparent UI color+alpha layer |
 | `MvecScaleNormalized` | 1 | send Streamline the game's DLSS motion-vector scale divided by the mvec buffer size; Streamline multiplies it back by that size before the driver's DLSS-G sees it, so raw values (0) arrive ~1500x too large. `fgvk.log` prints `DLSS-G receives MvecScale=(...)`, expected -1,-1. 0 is for A/B only |
+| `MFG4xTransitionPin` | 0 | opt-in x4 pacing workaround for verified Streamline 2.14 builds. It pins only the feedback-driven internal state transition; it does not force flip metering off. Unknown builds fail closed and are never modified. See `docs/X4_TRANSITION_PIN.md`. |
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
 | `KeyToggleFG` | 0x6A (numpad *) | hotkey: DLSS-G on/off |
 | `KeyCycleFrames` | 0x23 (End) | hotkey: cycle x2 / x3 / x4 |
+
+
+## x4 Streamline 2.14 transition pin
+
+`MFG4xTransitionPin=1` enables a narrowly gated runtime workaround for a verified x4 pacing
+transition in proprietary Streamline 2.14 `sl.dlss_g` builds. The patch is applied only for x4
+(`numFramesToGenerate == 3`) and restored for x2, x3 and FG-off before `slDLSSGSetOptions`.
+It does not modify NVIDIA's DLL on disk. Exact file SHA-256, PE identity and the complete local
+instruction shape are validated before the two-byte aligned atomic write; unknown or ambiguous
+builds remain untouched. Details, known hashes, disassembly and measured behavior are in
+`docs/X4_TRANSITION_PIN.md`.
 
 ## Script Extender coexistence
 
