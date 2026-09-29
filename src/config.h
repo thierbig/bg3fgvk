@@ -9,6 +9,7 @@ struct Config {
   bool     tagHudless  = true;   // tag the DLSS-SR output as HUD-less color (PureDark's recipe tags it every frame)
   bool     tagUI       = false;  // tag a transparent UI color+alpha layer
   bool     mvecScaleNormalized = true;  // send Streamline mvScale / mvec extent (it multiplies back by the extent); 0 = raw NGX values
+  bool     mfg4xTransitionPin = false; // opt-in: pin verified Streamline 2.14 x4 pacing transition
   uint32_t onAfterEvalFrames  = 60;   // DLSS-SR frames before DLSS-G turns on
   uint32_t offAfterIdleFrames = 30;   // presents without DLSS-SR before DLSS-G suspends
   // Hotkeys (Windows virtual-key codes, 0 = disabled). Defaults follow PureDark's INI: numpad * toggles

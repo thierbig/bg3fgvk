@@ -5,6 +5,7 @@
 #include "slboot.h"
 #include "vkhooks.h"
 #include "config.h"
+#include "mfg_transition_pin.h"
 
 #include <sl.h>
 #include <sl_helpers_vk.h>
@@ -202,9 +203,20 @@ void SetDLSSGeneration(bool on){
   uint32_t n = Rt().frames; if(n<1) n=1; if(g_framesMax && n > g_framesMax) n = g_framesMax;
   o.numFramesToGenerate = n;
   o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
+
+  // Apply immediately before SetOptions, on the existing game Present thread.
+  // x4 pins the verified Streamline 2.14 transition; x2/x3/off restore stock.
+  // With the option disabled no module scanning or code write is attempted.
+  MfgTransitionPinResult pinResult = MfgTransitionPinResult::NotRequested;
+  if(Cfg().mfg4xTransitionPin){
+    const bool wantPin = on && n == 3;
+    pinResult = SetMfg4xTransitionPin(reinterpret_cast<void*>(p_slDLSSGSetOptions), wantPin);
+  }
+
   sl::ViewportHandle vp{0};
   sl::Result r = p_slDLSSGSetOptions(vp, o);
-  Log("SetDLSSGeneration(%d) frames=%u retainResources=1 -> %d", (int)on, n, (int)r);
+  Log("SetDLSSGeneration(%d) frames=%u retainResources=1 transitionPin=%s -> %d",
+      (int)on, n, MfgTransitionPinResultName(pinResult), (int)r);
 }
 
 // Present thread only (slDLSSGGetState is not thread safe and SL wants it synced with present).
