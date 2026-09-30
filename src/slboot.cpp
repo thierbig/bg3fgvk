@@ -3,6 +3,8 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "slboot.h"
+#include "producer_fence_pacing.h"
+#include <atomic>
 #include "vkhooks.h"
 #include "config.h"
 
@@ -194,8 +196,12 @@ void OnDeviceCreated(){
 // Streamline itself flags as "Frame rate over 100ms". Both fatal WaitSemaphores timeouts in
 // the 09-03 logs sit inside that free/re-create cycle. Guide 6.4: "strongly recommended".
 static uint32_t g_framesMax = 0;                 // DLSSGState::numFramesToGenerateMax (0 = not read yet)
+static std::atomic<uint32_t> g_appliedGenerationFrames{0};
+uint32_t AppliedDLSSGenerationFrames(){ return g_appliedGenerationFrames.load(); }
 
 void SetDLSSGeneration(bool on){
+  ProducerFenceInvalidateSources(); // multiplier changes/suspend/resume start a fresh association
+  g_appliedGenerationFrames.store(0);
   if(!p_slDLSSGSetOptions) return;
   sl::DLSSGOptions o{};
   o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
@@ -204,6 +210,7 @@ void SetDLSSGeneration(bool on){
   o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
   sl::ViewportHandle vp{0};
   sl::Result r = p_slDLSSGSetOptions(vp, o);
+  if(r==sl::Result::eOk && on) g_appliedGenerationFrames.store(n);
   Log("SetDLSSGeneration(%d) frames=%u retainResources=1 -> %d", (int)on, n, (int)r);
 }
 

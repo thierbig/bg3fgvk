@@ -46,6 +46,9 @@ static void WriteDefaults(const char* path){
     "TagHUDLess=0\n"
     "; Feed a fully transparent UI color+alpha layer (0 = none)\n"
     "TagUI=0\n"
+    "; Opt-in x4 pacing: wait the current game producer fence before Present markers.\n"
+    "; Ambiguous producer coverage uses queue idle; x1/x2/x3 are unchanged.\n"
+    "X4ProducerFencePacing=0\n"
     "; Motion-vector scale handed to Streamline: 1 = the game's DLSS scale divided by the motion-vector buffer size\n"
     "; (Streamline multiplies it back by that size before DLSS-G sees it). 0 = raw values, 1500x too large; A/B only.\n"
     "MvecScaleNormalized=1\n"
@@ -70,6 +73,7 @@ void LoadConfig(){
   c.reflexSleep = GetPrivateProfileIntA("fgvk","ReflexSleep",c.reflexSleep?1:0,path)!=0;
   c.tagHudless  = GetPrivateProfileIntA("fgvk","TagHUDLess",c.tagHudless?1:0,path)!=0;
   c.tagUI       = GetPrivateProfileIntA("fgvk","TagUI",c.tagUI?1:0,path)!=0;
+  c.x4ProducerFencePacing = GetPrivateProfileIntA("fgvk","X4ProducerFencePacing",0,path)!=0;
   c.mvecScaleNormalized = GetPrivateProfileIntA("fgvk","MvecScaleNormalized",c.mvecScaleNormalized?1:0,path)!=0;
   c.onAfterEvalFrames  = (uint32_t)GetPrivateProfileIntA("fgvk","OnAfterEvalFrames",(int)c.onAfterEvalFrames,path);
   c.offAfterIdleFrames = (uint32_t)GetPrivateProfileIntA("fgvk","OffAfterIdleFrames",(int)c.offAfterIdleFrames,path);

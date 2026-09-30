@@ -18,5 +18,6 @@ bool EnsureStreamlineInit();
 void* SlProxyFn(const char* name);
 void OnDeviceCreated();
 void SetDLSSGeneration(bool on);   // Task 4 fills; called from the vkCreateDevice hook (Task 2)
+uint32_t AppliedDLSSGenerationFrames(); // successful options observation only; 0=off/unknown
 void PollDLSSGState();    // Task 4 fills; called from the present hook
 }

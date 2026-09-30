@@ -5,6 +5,7 @@
 // frame (see the frame-token section below for why, and how the two threads hand it over).
 // Full Vulkan resource descriptions are mandatory (an undefined format aborts inside SL).
 #include "inputs.h"
+#include "producer_fence_pacing.h"
 #include "mvecscale.h"
 #include "log.h"
 #include "slboot.h"
@@ -332,13 +333,13 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
 // his captured recipe carries no UI buffer and only occasionally a HUD-less one. The DLSS-SR
 // output is pre-post-processing (linear/HDR before tonemap); the guide requires HUD-less to be
 // in the SAME color space as the backbuffer, so feeding it can produce halos/ghosting.
-static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view, VkFormat fmt,
+static bool TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view, VkFormat fmt,
                             uint32_t w, uint32_t h){
   auto& fns = GetSlFns();
-  if(!fns.setTagForFrame || !g_lastToken) return;
+  if(!fns.setTagForFrame || !g_lastToken) return false;
   if(!g_logHudTag){ g_logHudTag=true;
     Log("DLSS-SR output %ux%u fmt=%d; optional tags: HUDLess=%d UI=%d", w, h, (int)fmt, (int)Cfg().tagHudless, (int)Cfg().tagUI); }
-  if(!Cfg().tagHudless && !Cfg().tagUI) return;
+  if(!Cfg().tagHudless && !Cfg().tagUI) return false;
   sl::Resource colorRes(sl::ResourceType::eTex2d,(void*)image,(void*)nullptr,
       (void*)view,(uint32_t)VK_IMAGE_LAYOUT_GENERAL);   // NGX writes Output as compute storage
   DescribeResource(colorRes,w,h,fmt,
@@ -352,7 +353,7 @@ static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view
   sl::ResourceTag tags[2]; uint32_t n=0;
   if(Cfg().tagHudless) tags[n++] = sl::ResourceTag(&colorRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent);
   if(haveUI)           tags[n++] = sl::ResourceTag(&uiRes, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, &extent);
-  if(!n) return;
+  if(!n) return false;
   sl::ViewportHandle vp{0};
   double _h0=NowMs();
   auto res = fns.setTagForFrame(*g_lastToken, vp, tags, n, reinterpret_cast<sl::CommandBuffer*>(cmd));
@@ -360,6 +361,7 @@ static void TagHUDLessColor(VkCommandBuffer cmd, VkImage image, VkImageView view
   static bool l2=false; if(!l2){ l2=true;
     if(res==sl::Result::eOk) Log("optional tags submitted (%u) %ux%u", n, w, h);
     else Log("slSetTagForFrame(HUDLess/UI) failed: %d",(int)res); }
+  return Cfg().tagHudless && res==sl::Result::eOk;
 }
 
 // ---- NGX inputs read (ported readNgxFrameInputs) --------------------------------------
@@ -417,9 +419,10 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
             sx, sy, g_in.mvecW, g_in.mvecH, (int)Cfg().mvecScaleNormalized); }
     }
   }
+  bool filedInputs=false;
   if(!isDlssg && params){
     ReadFrameInputs(params);
-    if(cmd && g_in.valid) SubmitFrameData(cmd);
+    if(cmd && g_in.valid) filedInputs=SubmitFrameData(cmd);
   }
 
   g_wdPos.store(11);
@@ -432,8 +435,11 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
     if(p_GetVoidPointer(const_cast<NVSDK_NGX_Parameter*>(params),"Output",&outPtr)==NGX_Success && outPtr){
       auto* res=reinterpret_cast<NVSDK_NGX_Resource_VK*>(outPtr);
       auto& iv=res->Resource.ImageViewInfo;
-      if(iv.Image && iv.ImageView && iv.Format!=VK_FORMAT_UNDEFINED)
-        TagHUDLessColor(cmd,iv.Image,iv.ImageView,iv.Format,iv.Width,iv.Height);
+      if(iv.Image && iv.ImageView && iv.Format!=VK_FORMAT_UNDEFINED){
+        const bool hudlessTagged=TagHUDLessColor(cmd,iv.Image,iv.ImageView,iv.Format,iv.Width,iv.Height);
+        if(filedInputs && g_lastToken)
+          ProducerFenceInput((uint32_t)*g_lastToken,cmd,g_in.depthImage,g_in.mvecImage,iv.Image,hudlessTagged);
+      }
     }
   }
   g_inEval=false;
@@ -495,12 +501,17 @@ void NgxProbeTick(){
 // ePresentStart into latency.markerPresentFrame, which is how DLSS-G finds this frame's
 // tags+constants (guide 8.0: "markers ePresentStart/ePresentEnd must provide correct frame
 // index so that it can be matched" to the constants).
-void PresentMarkersBegin(){
+uint32_t PeekSubmittedPresentToken(){
+  std::lock_guard<std::mutex> lk(g_qMutex);
+  const FrameSlot* f=QFront();
+  return f && f->submitted ? f->index : 0;
+}
+uint32_t PresentMarkersBegin(){
   auto& fns = GetSlFns();
-  if(!fns.pclSetMarker) return;
+  if(!fns.pclSetMarker) return 0;
   std::lock_guard<std::mutex> lk(g_qMutex);
   FrameSlot* f = QFront();
-  if(!f){ f = QPushNew(); if(!f) return; }   // no DLSS-SR this frame (menu/loading/video)
+  if(!f){ f = QPushNew(); if(!f) return 0; }   // no DLSS-SR this frame (menu/loading/video)
   SimStart(*f); MidMarkers(*f);              // keep the ladder complete and ordered
   fns.pclSetMarker(sl::PCLMarker::eRenderSubmitEnd,*f->tok);
   fns.pclSetMarker(sl::PCLMarker::ePresentStart,*f->tok);   // -> latency.markerPresentFrame = this frame
@@ -509,6 +520,7 @@ void PresentMarkersBegin(){
     uint32_t p=(uint32_t)GetCurrentThreadId(), e=g_evalTid.load();
     Log("threads: present tid=%lu, DLSS-SR eval tid=%lu%s", (unsigned long)p, (unsigned long)e,
         p==e ? " (same thread)" : " (DIFFERENT threads - token hand-off is cross-thread)"); }
+  return f->index;
 }
 void PresentMarkersEnd(){
   auto& fns = GetSlFns();

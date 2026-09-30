@@ -5,6 +5,7 @@
 #include "slboot.h"
 #include "inputs.h"
 #include "config.h"
+#include "producer_fence_pacing.h"
 #include <windows.h>
 #include <detours.h>
 #include <intrin.h>
@@ -195,6 +196,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     gPhysicalDevice = pd; gDevice = *out;
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){ gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
     Log("w_CreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
+    { Reentry _; ProducerFenceInitialize(gDevice,ip_GDPA); }
     { Reentry _; OnDeviceCreated(); }   // slboot: Reflex options (DLSS-G itself waits for the gate)
     StartWatchdog();
   }
@@ -213,6 +215,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
         ci->imageExtent.width, ci->imageExtent.height, (int)ci->imageFormat,
         (int)ci->presentMode, ci->minImageCount); }
   GateOffForSwapchain();
+  ProducerFenceInvalidateSources();
   VkResult r; { Reentry _; r = t_CreateSwapchainKHR(dev, ci, a, out); }
   static bool l2=false; if(!l2){ l2=true; Log("w_CreateSwapchainKHR -> %d sc=%p", (int)r, out?(void*)*out:nullptr); }
   return r;
@@ -225,7 +228,19 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPrese
   PosScope _p(1);
   NgxProbeTick();                  // cheap after hooked (one bool)
   EvalGate(ConsumeEvalSeen());     // slDLSSGSetOptions on the present thread, before this present (guide 6.0)
-  PresentMarkersBegin();           // RenderSubmitEnd + PresentStart with this frame's token (present thread)
+  const bool producerPacing=ProducerFencePacingApplies(Cfg().x4ProducerFencePacing,
+      g_genOn.load(),AppliedDLSSGenerationFrames());
+  ProducerFenceBoundary producerBoundary{};
+  if(producerPacing){
+    producerBoundary=ProducerFenceBegin(q,PeekSubmittedPresentToken());
+    VkResult completion;
+    { PosScope _w(5); Reentry _; completion=ProducerFencePace(producerBoundary,Cfg().tagHudless,PeekSubmittedPresentToken); }
+    if(completion!=VK_SUCCESS){
+      ProducerFenceEnd(producerBoundary,0,completion);
+      return completion; // preserve the real failure; do not issue a Present after a failed gate
+    }
+  }
+  const uint32_t markerToken=PresentMarkersBegin(); // original markers/token construction, no lock held during wait
   PollDLSSGState();                // slDLSSGGetState on the present thread: status + generated-frame stats
   static bool logged=false; if(!logged){ logged=true;
     Log("w_QueuePresentKHR live queue=%p tid=%lu waitSems=%u swapchains=%u pNext=%s (eval-driven gate)", (void*)q,
@@ -234,6 +249,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPrese
   VkResult r;
   { PosScope _q(2); Reentry _; r = t_QueuePresentKHR(q, pi); }   // interposer present = DLSS-G generation
   static int badLogged=0; if(r!=VK_SUCCESS && badLogged<10){ badLogged++; Log("present -> %d", (int)r); }
+  if(producerPacing) ProducerFenceEnd(producerBoundary,markerToken,r);
   { PosScope _m(3); PresentMarkersEnd(); }   // PresentEnd, then next frame: new token + Reflex sleep + SimulationStart
   return r;
 }
@@ -256,14 +272,24 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_WaitForFences(VkDevice d, uint32_t n, co
   PosScope _(5); return t_WaitForFences(d,n,f,all,timeout);
 }
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueueSubmit(VkQueue q, uint32_t n, const VkSubmitInfo* s, VkFence f){
-  PosScope _(6); return t_QueueSubmit(q,n,s,f);
+  PosScope _(6);
+  const uint64_t epoch=ProducerFenceSubmitEpoch(f);
+  const auto r=t_QueueSubmit(q,n,s,f);
+  ProducerFenceSubmit(q,n,s,f,epoch,r);
+  return r;
 }
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueueSubmit2(VkQueue q, uint32_t n, const VkSubmitInfo2* s, VkFence f){
-  PosScope _(6); return t_QueueSubmit2(q,n,s,f);
+  PosScope _(6);
+  const uint64_t epoch=ProducerFenceSubmitEpoch(f);
+  const auto r=t_QueueSubmit2(q,n,s,f);
+  ProducerFenceSubmit2(q,n,s,f,epoch,r);
+  return r;
 }
 static VKAPI_ATTR VkResult VKAPI_CALL w_DeviceWaitIdle(VkDevice d){
   Log("game vkDeviceWaitIdle (tid=%lu)", (unsigned long)GetCurrentThreadId());
-  VkResult r; { PosScope _(7); Reentry _r; r = t_DeviceWaitIdle(d); } return r;
+  VkResult r; { PosScope _(7); Reentry _r; r = t_DeviceWaitIdle(d); }
+  if(r==VK_SUCCESS){ ProducerFenceInvalidateSources(); ProducerFenceLogTotals(); }
+  return r;
 }
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueueWaitIdle(VkQueue q){
   static int n=0; if(n<5){ n++; Log("game vkQueueWaitIdle queue=%p (tid=%lu)", (void*)q, (unsigned long)GetCurrentThreadId()); }
@@ -274,7 +300,7 @@ static VKAPI_ATTR void VKAPI_CALL w_SetHdrMetadataEXT(VkDevice d, uint32_t n, co
   t_SetHdrMetadataEXT(d,n,sc,md);
 }
 // Swap in a wrapper for the names above; everything else passes straight through.
-static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip){
+static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip, VkDevice resolvedDevice=VK_NULL_HANDLE){
   if(!strcmp(name,"vkAcquireNextImageKHR")){ t_AcquireNextImageKHR=(PFN_vkAcquireNextImageKHR)ip; return (PFN_vkVoidFunction)w_AcquireNextImageKHR; }
   if(!strcmp(name,"vkWaitForFences"))      { t_WaitForFences=(PFN_vkWaitForFences)ip;             return (PFN_vkVoidFunction)w_WaitForFences; }
   if(!strcmp(name,"vkQueueSubmit"))        { t_QueueSubmit=(PFN_vkQueueSubmit)ip;                 return (PFN_vkVoidFunction)w_QueueSubmit; }
@@ -282,7 +308,7 @@ static PFN_vkVoidFunction WrapDeviceFn(const char* name, PFN_vkVoidFunction ip){
   if(!strcmp(name,"vkDeviceWaitIdle"))     { t_DeviceWaitIdle=(PFN_vkDeviceWaitIdle)ip;           return (PFN_vkVoidFunction)w_DeviceWaitIdle; }
   if(!strcmp(name,"vkQueueWaitIdle"))      { t_QueueWaitIdle=(PFN_vkQueueWaitIdle)ip;             return (PFN_vkVoidFunction)w_QueueWaitIdle; }
   if(!strcmp(name,"vkSetHdrMetadataEXT"))  { t_SetHdrMetadataEXT=(PFN_vkSetHdrMetadataEXT)ip;     return (PFN_vkVoidFunction)w_SetHdrMetadataEXT; }
-  return ip;
+  return ProducerFenceWrap(name,ip,resolvedDevice);
 }
 
 // ---- wrapped device-proc-addr: hand the game interposer device fns, wrap present/swapchain --
@@ -302,7 +328,7 @@ static PFN_vkVoidFunction GameViewGDPA(VkDevice dev, const char* name){
   if (!ip) return nullptr;
   if (!strcmp(name, "vkQueuePresentKHR"))   { t_QueuePresentKHR   = (PFN_vkQueuePresentKHR)ip;   return (PFN_vkVoidFunction)w_QueuePresentKHR; }   // wrap: PollDLSSGState MUST be on the present thread
   if (!strcmp(name, "vkCreateSwapchainKHR")){ t_CreateSwapchainKHR= (PFN_vkCreateSwapchainKHR)ip; return (PFN_vkVoidFunction)w_CreateSwapchainKHR; }
-  return WrapDeviceFn(name, ip);   // stall-attribution wrappers, else the interposer's own device function
+  return WrapDeviceFn(name, ip, dev);   // lifecycle forwarding is scoped to this device
 }
 
 // ---- the single entry hook: vkGetInstanceProcAddr ---------------------------------------
@@ -420,6 +446,7 @@ void InstallVkHooks(){
 }
 
 void RemoveVkHooks(){
+  ProducerFenceLogTotals();
   DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
   DetourDetach(&(PVOID&)o_GIPA,(PVOID)h_GetInstanceProcAddr);
   DetourDetach(&(PVOID&)o_GDPA_real,(PVOID)h_GetDeviceProcAddrExport);

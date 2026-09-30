@@ -47,6 +47,7 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `ReflexSleep` | 1 | call slReflexSleep once per frame |
 | `TagHUDLess` | 0 | use the final backbuffer for FG color; 1 tags the transient DLSS-SR output before final color processing |
 | `TagUI` | 0 | feed a transparent UI color+alpha layer |
+| `X4ProducerFencePacing` | 0 | opt-in x4 completion gate before RenderSubmitEnd/PresentStart; guarded terminal producer fence with conservative queue-idle fallback |
 | `MvecScaleNormalized` | 1 | send Streamline the game's DLSS motion-vector scale divided by the mvec buffer size; Streamline multiplies it back by that size before the driver's DLSS-G sees it, so raw values (0) arrive ~1500x too large. `fgvk.log` prints `DLSS-G receives MvecScale=(...)`, expected -1,-1. 0 is for A/B only |
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
@@ -56,6 +57,48 @@ loads every DLL in `bin\NativeMods\` at startup.
 When upgrading, set `TagHUDLess=0` in an existing `fgvk.ini` and restart.
 Existing INI files are preserved; the new default does not replace an explicit
 `TagHUDLess=1`, which can still cause orbit flickering with protected depth/motion.
+
+## Opt-in x4 producer-fence pacing
+
+Set `X4ProducerFencePacing=1` under `[fgvk]` and restart to enable this completion
+gate. An absent key defaults to OFF, and existing INIs are never rewritten.
+The wait applies only to FG-enabled, successfully applied
+`numFramesToGenerate=3` (normal x4). x1/x2/x3 and FG-off add no pacing wait.
+
+In controlled testing, waiting for the game's source GPU prefix at the existing
+host boundary before `RenderSubmitEnd` / `PresentStart` restored smooth x4
+display cadence. This does not establish a missing GPU resource-readiness
+dependency: Streamline's GPU synchronization, Present arguments and queue
+modes are unchanged.
+
+The gate dynamically selects the existing final successful game Submit2 fence
+only when a conservative four-submit prefix, source/token continuity,
+queue/thread association, input command-buffer coverage and live fence/
+semaphore epochs can all be validated. The selector retains the tested
+34-command-buffer NR shape; unsupported shapes and transitions may fall back
+to `vkQueueWaitIdle(gameQueue)`. Fence reset/destroy waits for a borrowed host
+wait to complete. No registry or frame-token lock is held over that GPU wait.
+
+Lifecycle forwarding uses the correctly layered per-device dispatch table;
+different instance and device resolver addresses do not invalidate otherwise
+valid object-lifetime evidence. Actual object/epoch ambiguity still disables
+fence selection. There are fixed tracking arrays, no per-frame heap allocation,
+no CSV exporters and no private Streamline binary patch.
+
+This is a pacing fix, **not a demonstrated FPS optimization**. The tested
+dispatch-corrected port on RTX 5080 with NR and qUINT Bloom enabled recorded
+4,563 terminal-fence waits and 2,176 conservative fallbacks over the whole
+session. Those totals include transitions; they are not a benchmark-window
+fallback rate. Its 25.56-second FrameView run recorded 294.06 displayed FPS
+at x4, median display interval 3.397 ms, p99 3.665 ms, and no reported dropped
+outputs. Throughput was essentially unchanged against the queue-idle baseline.
+That port preceded the latest upstream input-lifetime changes; the combined
+tree builds and passes host tests but has not separately been tested in-game.
+
+An enable message, the first selected fence and aggregate wait/fallback counts
+at existing device-idle/teardown points are logged. Run the existing host suite
+and the Vulkan-mock selector/lifetime/dispatch tests with
+`ctest --test-dir build --output-on-failure`; no GPU is needed for those tests.
 
 ## Script Extender coexistence
 
