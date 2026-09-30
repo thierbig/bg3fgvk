@@ -45,13 +45,17 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `DLSSGFrames` | 3 | generated frames per real frame (1 = x2, 2 = x3, 3 = x4) |
 | `ReflexMode` | 2 | 0 off, 1 low latency, 2 low latency + boost |
 | `ReflexSleep` | 1 | call slReflexSleep once per frame |
-| `TagHUDLess` | 1 | feed the DLSS-SR output as HUD-less color (PureDark's recipe; 0 = backbuffer only) |
+| `TagHUDLess` | 0 | use the final backbuffer for FG color; 1 tags the transient DLSS-SR output before final color processing |
 | `TagUI` | 0 | feed a transparent UI color+alpha layer |
 | `MvecScaleNormalized` | 1 | send Streamline the game's DLSS motion-vector scale divided by the mvec buffer size; Streamline multiplies it back by that size before the driver's DLSS-G sees it, so raw values (0) arrive ~1500x too large. `fgvk.log` prints `DLSS-G receives MvecScale=(...)`, expected -1,-1. 0 is for A/B only |
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
 | `KeyToggleFG` | 0x6A (numpad *) | hotkey: DLSS-G on/off |
 | `KeyCycleFrames` | 0x23 (End) | hotkey: cycle x2 / x3 / x4 |
+
+When upgrading, set `TagHUDLess=0` in an existing `fgvk.ini` and restart.
+Existing INI files are preserved; the new default does not replace an explicit
+`TagHUDLess=1`, which can still cause orbit flickering with protected depth/motion.
 
 ## Script Extender coexistence
 

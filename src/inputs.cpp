@@ -1,5 +1,5 @@
 // DLSS-G input pipeline: snoop the game's DLSS-SR EvaluateFeature for depth/mvec/jitter, tag
-// Depth, MotionVectors and HUDLessColor (= the DLSS-SR output, PureDark's recipe), push
+// preserve Depth/MotionVectors and leave the early SR HUD-less color off by default, push
 // sl::Constants (synthetic perspective, identity reprojection - also his recipe), and run the
 // PCL/Reflex marker ladder across the eval thread and the present thread on ONE frame token per
 // frame (see the frame-token section below for why, and how the two threads hand it over).
@@ -263,10 +263,12 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   g_lastToken=token;
 
   sl::ViewportHandle vp{0};
+  // BG3 aliases depth and motion-vector allocations with later render targets.
+  // Preserve both at tagging, using their observed attachment layouts.
   sl::Resource depthRes(sl::ResourceType::eTex2d,(void*)g_in.depthImage,(void*)nullptr,
-      (void*)g_in.depthView,(uint32_t)VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+      (void*)g_in.depthView,(uint32_t)VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
   sl::Resource mvecRes(sl::ResourceType::eTex2d,(void*)g_in.mvecImage,(void*)nullptr,
-      (void*)g_in.mvecView,(uint32_t)VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      (void*)g_in.mvecView,(uint32_t)VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   DescribeResource(depthRes,g_in.depthW,g_in.depthH,g_in.depthFormat,
       VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
   DescribeResource(mvecRes,g_in.mvecW,g_in.mvecH,g_in.mvecFormat,
@@ -274,8 +276,8 @@ static bool SubmitFrameData(VkCommandBuffer cmd){
   sl::Extent depthExtent{0,0,g_in.depthW,g_in.depthH};
   sl::Extent mvecExtent{0,0,g_in.mvecW,g_in.mvecH};
   sl::ResourceTag tags[] = {
-    sl::ResourceTag(&depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &depthExtent),
-    sl::ResourceTag(&mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &mvecExtent),
+    sl::ResourceTag(&depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &depthExtent),
+    sl::ResourceTag(&mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &mvecExtent),
   };
   double _t0=NowMs();
   auto tagRes = fns.setTagForFrame(*token, vp, tags, 2, reinterpret_cast<sl::CommandBuffer*>(cmd));
@@ -424,7 +426,7 @@ static NVSDK_NGX_Result __cdecl h_NgxEvaluate(VkCommandBuffer cmd, const NVSDK_N
   NVSDK_NGX_Result r = o_NgxEvaluate(cmd,h,params,cb);
   g_wdPos.store(12);
 
-  // AFTER orig: SR just wrote Output (upscaled pre-UI color) - DLSS-G's required color source.
+  // AFTER orig: SR wrote Output before final color processing; its optional tag defaults off.
   if(!isDlssg && r==NGX_Success && cmd && params && g_in.valid && p_GetVoidPointer){
     void* outPtr=nullptr;
     if(p_GetVoidPointer(const_cast<NVSDK_NGX_Parameter*>(params),"Output",&outPtr)==NGX_Success && outPtr){

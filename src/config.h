@@ -6,7 +6,7 @@ struct Config {
   uint32_t dlssgFrames = 3;      // generated frames per real frame: 1 = x2, 2 = x3, 3 = x4
   int      reflexMode  = 2;      // 0 off, 1 low latency, 2 low latency + boost (PureDark's default)
   bool     reflexSleep = true;   // slReflexSleep once per frame (Reflex checklist: always on)
-  bool     tagHudless  = true;   // tag the DLSS-SR output as HUD-less color (PureDark's recipe tags it every frame)
+  bool     tagHudless  = false;  // SR output precedes the final backbuffer's color processing
   bool     tagUI       = false;  // tag a transparent UI color+alpha layer
   bool     mvecScaleNormalized = true;  // send Streamline mvScale / mvec extent (it multiplies back by the extent); 0 = raw NGX values
   uint32_t onAfterEvalFrames  = 60;   // DLSS-SR frames before DLSS-G turns on
