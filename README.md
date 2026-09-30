@@ -71,9 +71,11 @@ Troubleshooting.
 | Numpad `*` | Frame generation on / off |
 | `End` | Cycle x2, x3, x4 |
 
-If the NVIDIA App has a per-game *DLSS Override, Frame Generation* setting for Baldur's Gate 3
-(for example "4x"), it pins the multiplier and `End` appears to do nothing. Set it to "Use 3D
-application setting" to let the mod decide. It works either way.
+If the NVIDIA App has a *DLSS Override - Frame Generation Mode* for Baldur's Gate 3, often set
+globally (for example "Multiplier: 4x"), it pins the multiplier and `End` appears to do nothing.
+It also makes the driver load its own newer Streamline plugins in place of the ones this mod ships.
+bg3fgvk still runs, but the OptiScaler builds used for DLSS 5 can crash on them. Set it to "Use 3D
+app setting" for Baldur's Gate 3 to let the mod decide.
 
 Advanced settings (multiplier, Reflex mode, hotkeys) live in `bin\NativeMods\fgvk.ini`, written
 with defaults on first launch and documented in [BUILD.md](BUILD.md).
@@ -110,12 +112,14 @@ normally handled for you, so no registry edits are required:
 
 ## DLSS 5 Neural Rendering (optional)
 
-bg3fgvk runs together with DLSS 5 through the
-[OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR) fork of OptiScaler. OptiScaler
-passes the game's DLSS call through to the driver and runs the Neural Rendering model over the
-upscaled image; bg3fgvk reads that same call, so the generated frames carry the result. RTX 50
-series only, and you must supply NVIDIA's `nvngx_dlssnr.dll` yourself (the RenoDX Discord distributes
-it with its DLSS 5 add-on). Setup and the ini keys that matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
+bg3fgvk runs together with DLSS 5 through OptiScaler. The recommended build is janblade's
+[OptiScaler-F5-DLSSNR-Multipass](https://github.com/janblade/OptiScaler-F5-DLSSNR-Multipass), which
+runs NVIDIA's Neural Rendering model on the render-resolution image just before DLSS upscales it;
+bg3fgvk reads that same DLSS call, so the generated frames carry the result. Tested on RTX 50 with
+driver 616.92; it needs driver 616.56 or newer and NVIDIA's `nvngx_dlssnr.dll`, which you supply
+yourself (the RenoDX Discord distributes it with its DLSS 5 add-on). Set the NVIDIA App's
+frame generation override for Baldur's Gate 3 to "Use 3D app setting", or this OptiScaler build
+crashes at startup. Setup and the ini keys that matter are in **[docs/DLSS5.md](docs/DLSS5.md)**.
 
 ![DLSS 5 Neural Rendering and DLSS Frame Generation x4 together in the Shattered Sanctum: 245 fps displayed (top right), DLSS-G indicator top left, DLSS and Neural Rendering indicators bottom left](docs/images/dlss5-fg-x4-shattered-sanctum.png)
 
@@ -151,6 +155,7 @@ Developers: build steps, how it works, the Streamline runtime files and the stac
 - Norbyte's Baldur's Gate 3 Script Extender, which this mod is built to coexist with.
 - PureDark's frame generation mod for Baldur's Gate 3, whose DLSS-G input recipe served as the
   reference for what the game's buffers look like.
-- Dagherbou's OptiScaler_DLSSNR fork, which makes the optional DLSS 5 setup possible.
+- janblade's OptiScaler-F5-DLSSNR-Multipass, wilsjo2's OptiScaler-DLSSNR-PreSR-Multipass and
+  Dagherbou's original OptiScaler_DLSSNR, the chain of forks behind the optional DLSS 5 setup.
 - !FingerPaint, who found that the OptiScaler_DLSSNR fork and bg3fgvk work together and reported
   the combination.
