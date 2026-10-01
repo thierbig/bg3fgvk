@@ -54,9 +54,11 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `KeyToggleFG` | 0x6A (numpad *) | hotkey: DLSS-G on/off |
 | `KeyCycleFrames` | 0x23 (End) | hotkey: cycle x2 / x3 / x4 |
 
-When upgrading, set `TagHUDLess=0` in an existing `fgvk.ini` and restart.
-Existing INI files are preserved; the new default does not replace an explicit
-`TagHUDLess=1`, which can still cause orbit flickering with protected depth/motion.
+Existing INI files are preserved; nothing needs editing when upgrading. An INI from 0.1.0-1.1.0
+(no `ConfigVersion` key) is updated once on first launch: `TagHUDLess` becomes 0 (those versions wrote
+1, which causes orbit flickering), `PresentPacing=1` is added unless the key is already there, and
+`ConfigVersion=2` marks it done. `fgvk.log` says so (`config: updated fgvk.ini ...`). Values changed
+after that are kept.
 
 ## Script Extender coexistence
 

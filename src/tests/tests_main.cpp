@@ -4,8 +4,9 @@ int test_mvecscale();
 int test_exportroute();
 int test_slmodule();
 int test_presentpacer();
+int test_inimigrate();
 int main(){
-  int fails = test_mvecscale() + test_exportroute() + test_slmodule() + test_presentpacer();
+  int fails = test_mvecscale() + test_exportroute() + test_slmodule() + test_presentpacer() + test_inimigrate();
   printf("%d failure(s)\n", fails);
   return fails ? 1 : 0;
 }

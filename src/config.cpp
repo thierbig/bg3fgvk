@@ -1,5 +1,6 @@
 #include "config.h"
 #include "log.h"
+#include "inimigrate.h"
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
@@ -35,6 +36,8 @@ static void WriteDefaults(const char* path){
   fputs(
     "; fgvk - DLSS Frame Generation for Baldur's Gate 3 (Vulkan). Edit and restart the game.\n"
     "[fgvk]\n"
+    "; Settings format; fgvk updates older files automatically. Do not edit.\n"
+    "ConfigVersion=2\n"
     "; Generated frames per real frame: 1 = x2, 2 = x3, 3 = x4 (clamped to what the GPU supports)\n"
     "DLSSGFrames=3\n"
     "; Reflex: 0 = off, 1 = low latency, 2 = low latency + boost\n"
@@ -65,6 +68,8 @@ static void WriteDefaults(const char* path){
 void LoadConfig(){
   char path[MAX_PATH]; IniPath(path,sizeof(path));
   if(GetFileAttributesA(path)==INVALID_FILE_ATTRIBUTES) WriteDefaults(path);
+  else if(int was = MigrateIni(path); was < kIniVersion)
+    Log("config: updated fgvk.ini from format %d to %d: TagHUDLess=0 (orbit flickering fix), PresentPacing=1 unless set", was, kIniVersion);
   Config c;
   c.dlssgFrames = (uint32_t)GetPrivateProfileIntA("fgvk","DLSSGFrames",(int)c.dlssgFrames,path);
   if(c.dlssgFrames<1) c.dlssgFrames=1; if(c.dlssgFrames>3) c.dlssgFrames=3;

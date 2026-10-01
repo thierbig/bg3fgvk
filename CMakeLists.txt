@@ -19,7 +19,7 @@ target_link_libraries(fgvk-stack PRIVATE dbghelp)
 
 # Unit tests (host-only: Vulkan headers for mocked entry points, no driver or Streamline).
 add_executable(fgvk-tests src/tests/tests_main.cpp src/tests/mvecscale_test.cpp src/tests/exportroute_test.cpp src/tests/slmodule_test.cpp
-  src/tests/presentpacer_test.cpp)
+  src/tests/presentpacer_test.cpp src/tests/inimigrate_test.cpp)
 target_include_directories(fgvk-tests PRIVATE src "${BG3SE}/VulkanSDK/Include")
 target_compile_definitions(fgvk-tests PRIVATE VK_NO_PROTOTYPES)
 enable_testing()
