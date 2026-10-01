@@ -46,6 +46,9 @@ static void WriteDefaults(const char* path){
     "TagHUDLess=0\n"
     "; Feed a fully transparent UI color+alpha layer (0 = none)\n"
     "TagUI=0\n"
+    "; While frame generation is on, wait (max 100 ms) for the frame's GPU work before marking PresentStart.\n"
+    "; Smooths bursty multi-frame-generation pacing at a small fps cost. 0 = off\n"
+    "PresentPacing=0\n"
     "; Motion-vector scale handed to Streamline: 1 = the game's DLSS scale divided by the motion-vector buffer size\n"
     "; (Streamline multiplies it back by that size before DLSS-G sees it). 0 = raw values, 1500x too large; A/B only.\n"
     "MvecScaleNormalized=1\n"
@@ -70,6 +73,7 @@ void LoadConfig(){
   c.reflexSleep = GetPrivateProfileIntA("fgvk","ReflexSleep",c.reflexSleep?1:0,path)!=0;
   c.tagHudless  = GetPrivateProfileIntA("fgvk","TagHUDLess",c.tagHudless?1:0,path)!=0;
   c.tagUI       = GetPrivateProfileIntA("fgvk","TagUI",c.tagUI?1:0,path)!=0;
+  c.presentPacing = GetPrivateProfileIntA("fgvk","PresentPacing",c.presentPacing?1:0,path)!=0;
   c.mvecScaleNormalized = GetPrivateProfileIntA("fgvk","MvecScaleNormalized",c.mvecScaleNormalized?1:0,path)!=0;
   c.onAfterEvalFrames  = (uint32_t)GetPrivateProfileIntA("fgvk","OnAfterEvalFrames",(int)c.onAfterEvalFrames,path);
   c.offAfterIdleFrames = (uint32_t)GetPrivateProfileIntA("fgvk","OffAfterIdleFrames",(int)c.offAfterIdleFrames,path);
@@ -80,8 +84,8 @@ void LoadConfig(){
   c.keyCycleFrames = key("KeyCycleFrames", c.keyCycleFrames);
   g_cfg=c;
   g_rt.frames = c.dlssgFrames; g_rt.fgUserOff = false;
-  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d MvecScaleNormalized=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x",
-      path, c.dlssgFrames, c.dlssgFrames+1, c.reflexMode, (int)c.reflexSleep, (int)c.tagHudless, (int)c.tagUI, (int)c.mvecScaleNormalized, c.onAfterEvalFrames, c.offAfterIdleFrames,
+  Log("config %s: DLSSGFrames=%u (x%u) ReflexMode=%d ReflexSleep=%d TagHUDLess=%d TagUI=%d PresentPacing=%d MvecScaleNormalized=%d OnAfterEvalFrames=%u OffAfterIdleFrames=%u keys: toggleFG=0x%x cycle=0x%x",
+      path, c.dlssgFrames, c.dlssgFrames+1, c.reflexMode, (int)c.reflexSleep, (int)c.tagHudless, (int)c.tagUI, (int)c.presentPacing, (int)c.mvecScaleNormalized, c.onAfterEvalFrames, c.offAfterIdleFrames,
       c.keyToggleFG, c.keyCycleFrames);
 }
 }

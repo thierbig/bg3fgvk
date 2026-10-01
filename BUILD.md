@@ -47,6 +47,7 @@ loads every DLL in `bin\NativeMods\` at startup.
 | `ReflexSleep` | 1 | call slReflexSleep once per frame |
 | `TagHUDLess` | 0 | use the final backbuffer for FG color; 1 tags the transient DLSS-SR output before final color processing |
 | `TagUI` | 0 | feed a transparent UI color+alpha layer |
+| `PresentPacing` | 0 | while DLSS-G is on, wait (max 100 ms) for the frame's GPU work before `PresentStart`; smooths bursty x4 pacing at a small fps cost. `fgvk.log` prints `pacing:` every 600 frames (avg/max wait, timeouts) |
 | `MvecScaleNormalized` | 1 | send Streamline the game's DLSS motion-vector scale divided by the mvec buffer size; Streamline multiplies it back by that size before the driver's DLSS-G sees it, so raw values (0) arrive ~1500x too large. `fgvk.log` prints `DLSS-G receives MvecScale=(...)`, expected -1,-1. 0 is for A/B only |
 | `OnAfterEvalFrames` | 60 | DLSS-SR frames before DLSS-G turns on |
 | `OffAfterIdleFrames` | 30 | presents without DLSS-SR before DLSS-G suspends |
