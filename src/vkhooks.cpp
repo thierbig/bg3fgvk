@@ -5,6 +5,7 @@
 #include "slboot.h"
 #include "inputs.h"
 #include "config.h"
+#include "presentpacer.h"
 #include <windows.h>
 #include <detours.h>
 #include <intrin.h>
@@ -25,7 +26,7 @@ std::atomic<uint32_t> g_wdPresents{0};
 std::atomic<uint32_t> g_wdEvals{0};
 // pos: 0 idle (inside the game); 1 present-enter; 2 inside proxy present; 3 post-present
 // markers/Reflex sleep; 4 game vkAcquireNextImageKHR; 5 vkWaitForFences; 6 vkQueueSubmit(2);
-// 7 vkDeviceWaitIdle; 8 vkQueueWaitIdle; 10/11/12 eval stages
+// 7 vkDeviceWaitIdle; 8 vkQueueWaitIdle; 9 present pacing wait; 10/11/12 eval stages
 std::atomic<int> g_wdPos{0};
 static std::atomic<long long> g_wdPosSinceUs{0};
 static std::atomic<bool> g_genOn{false};   // DLSS-G currently requested on (gate state)
@@ -186,6 +187,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateInstance(
   return r;
 }
 
+static void ResolvePacer(VkDevice dev);
 static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     VkPhysicalDevice pd, const VkDeviceCreateInfo* ci,
     const VkAllocationCallbacks* a, VkDevice* out){
@@ -195,6 +197,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateDevice(
     gPhysicalDevice = pd; gDevice = *out;
     for (uint32_t i=0;i<ci->queueCreateInfoCount;i++){ gGraphicsFamily = ci->pQueueCreateInfos[i].queueFamilyIndex; break; }
     Log("w_CreateDevice ok device=%p phys=%p gfxFamily=%u", (void*)gDevice,(void*)pd,gGraphicsFamily);
+    ResolvePacer(gDevice);
     { Reentry _; OnDeviceCreated(); }   // slboot: Reflex options (DLSS-G itself waits for the gate)
     StartWatchdog();
   }
@@ -218,6 +221,35 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_CreateSwapchainKHR(
   return r;
 }
 
+// PresentPacing (see presentpacer.h): resolved once per device through the interposer, used on
+// the present thread only. Stats go to the log every 600 paced frames.
+static PacerVk g_pacerVk{};
+static PresentPacer g_pacer;
+static void ResolvePacer(VkDevice dev){
+  if(!Cfg().presentPacing || !ip_GDPA) return;
+  Reentry _;
+  PacerVk vk{}; vk.device=dev;
+  vk.createFence    = (PFN_vkCreateFence)ip_GDPA(dev,"vkCreateFence");
+  vk.resetFences    = (PFN_vkResetFences)ip_GDPA(dev,"vkResetFences");
+  vk.getFenceStatus = (PFN_vkGetFenceStatus)ip_GDPA(dev,"vkGetFenceStatus");
+  vk.waitForFences  = (PFN_vkWaitForFences)ip_GDPA(dev,"vkWaitForFences");
+  vk.queueSubmit    = (PFN_vkQueueSubmit)ip_GDPA(dev,"vkQueueSubmit");
+  g_pacerVk=vk;
+  Log("PresentPacing on: wait for the frame's GPU work before PresentStart while DLSS-G is on (fns %s)",
+      vk.createFence&&vk.resetFences&&vk.getFenceStatus&&vk.waitForFences&&vk.queueSubmit ? "ok" : "MISSING");
+}
+static void PacePresent(VkQueue q){
+  static uint32_t n=0, timeouts=0, skipped=0, unavailable=0; static double sumMs=0, maxMs=0;
+  double t0=NowUs()/1000.0; PaceResult r;
+  { PosScope _w(9); Reentry _; r = g_pacer.Pace(g_pacerVk, q, 100ull*1000*1000); }
+  double ms=NowUs()/1000.0-t0;
+  n++; sumMs+=ms; if(ms>maxMs) maxMs=ms;
+  if(r==PaceResult::TimedOut) timeouts++; else if(r==PaceResult::SkippedBusy) skipped++; else if(r==PaceResult::Unavailable) unavailable++;
+  if(n==600){
+    Log("pacing: 600 frames avg wait %.2fms max %.2fms timeouts=%u skipped=%u unavailable=%u", sumMs/n, maxMs, timeouts, skipped, unavailable);
+    n=timeouts=skipped=unavailable=0; sumMs=maxMs=0; }
+}
+
 static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPresentInfoKHR* pi){
   StartWatchdog();
   g_wdPresents.fetch_add(1);
@@ -225,6 +257,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL w_QueuePresentKHR(VkQueue q, const VkPrese
   PosScope _p(1);
   NgxProbeTick();                  // cheap after hooked (one bool)
   EvalGate(ConsumeEvalSeen());     // slDLSSGSetOptions on the present thread, before this present (guide 6.0)
+  if(Cfg().presentPacing && g_genOn.load()) PacePresent(q);   // frame's GPU work done before PresentStart
   PresentMarkersBegin();           // RenderSubmitEnd + PresentStart with this frame's token (present thread)
   PollDLSSGState();                // slDLSSGGetState on the present thread: status + generated-frame stats
   static bool logged=false; if(!logged){ logged=true;

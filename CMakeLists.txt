@@ -17,8 +17,10 @@ add_executable(fgvk-stack src/tools/fgvk-stack.cpp)
 target_compile_definitions(fgvk-stack PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(fgvk-stack PRIVATE dbghelp)
 
-# Unit tests (host-only, no Vulkan/Streamline dependency).
-add_executable(fgvk-tests src/tests/tests_main.cpp src/tests/mvecscale_test.cpp src/tests/exportroute_test.cpp src/tests/slmodule_test.cpp)
-target_include_directories(fgvk-tests PRIVATE src)
+# Unit tests (host-only: Vulkan headers for mocked entry points, no driver or Streamline).
+add_executable(fgvk-tests src/tests/tests_main.cpp src/tests/mvecscale_test.cpp src/tests/exportroute_test.cpp src/tests/slmodule_test.cpp
+  src/tests/presentpacer_test.cpp)
+target_include_directories(fgvk-tests PRIVATE src "${BG3SE}/VulkanSDK/Include")
+target_compile_definitions(fgvk-tests PRIVATE VK_NO_PROTOTYPES)
 enable_testing()
 add_test(NAME mvecscale COMMAND fgvk-tests)
