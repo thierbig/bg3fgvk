@@ -8,7 +8,7 @@ struct Config {
   bool     reflexSleep = true;   // slReflexSleep once per frame (Reflex checklist: always on)
   bool     tagHudless  = false;  // SR output precedes the final backbuffer's color processing
   bool     tagUI       = false;  // tag a transparent UI color+alpha layer
-  bool     presentPacing = false; // wait for the frame's GPU work before PresentStart while DLSS-G is on
+  bool     presentPacing = true;  // wait for the frame's GPU work before PresentStart while DLSS-G is on
   bool     mvecScaleNormalized = true;  // send Streamline mvScale / mvec extent (it multiplies back by the extent); 0 = raw NGX values
   uint32_t onAfterEvalFrames  = 60;   // DLSS-SR frames before DLSS-G turns on
   uint32_t offAfterIdleFrames = 30;   // presents without DLSS-SR before DLSS-G suspends

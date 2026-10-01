@@ -86,6 +86,9 @@ with defaults on first launch and documented in [BUILD.md](BUILD.md).
 - A little more input latency than without frame generation; Reflex Boost keeps it in check.
   30 fps rendered or more is where x4 looks good; below that, x2 or x3 is the better trade.
 - It pauses when the window loses focus, on loading screens and in videos, and resumes by itself.
+- Frame pacing is even: each real frame finishes on the GPU before the generated ones are timed
+  against it (`PresentPacing=1`, on by default). It costs a few percent of rendered fps on some systems;
+  set it to 0 in `fgvk.ini` to trade smoothness for that.
 - Very fast camera pans can show light smearing. That is the technique, not a bug.
 
 ## Running under Wine / Proton (Linux)

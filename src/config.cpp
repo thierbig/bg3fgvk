@@ -48,7 +48,7 @@ static void WriteDefaults(const char* path){
     "TagUI=0\n"
     "; While frame generation is on, wait (max 100 ms) for the frame's GPU work before marking PresentStart.\n"
     "; Smooths bursty multi-frame-generation pacing at a small fps cost. 0 = off\n"
-    "PresentPacing=0\n"
+    "PresentPacing=1\n"
     "; Motion-vector scale handed to Streamline: 1 = the game's DLSS scale divided by the motion-vector buffer size\n"
     "; (Streamline multiplies it back by that size before DLSS-G sees it). 0 = raw values, 1500x too large; A/B only.\n"
     "MvecScaleNormalized=1\n"
