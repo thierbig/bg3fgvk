@@ -6,6 +6,7 @@
 #include "inputs.h"
 #include "config.h"
 #include "presentpacer.h"
+#include "evalgate.h"
 #include <windows.h>
 #include <detours.h>
 #include <intrin.h>
@@ -85,7 +86,7 @@ static void StartWatchdog(){
 // eRetainResourcesWhenOff those transitions free nothing. Loading screens also call
 // vkDeviceWaitIdle from a loader thread (sl.log tid 540); with FG suspended there that flush
 // meets an idle pacer.
-static uint32_t g_evalStreak = 0, g_idleStreak = 0;
+static GateStreaks g_gate;
 #define kOnAfterEvalFrames  (Cfg().onAfterEvalFrames)    // ~2s of world rendering before enabling
 #define kOffAfterIdleFrames (Cfg().offAfterIdleFrames)   // ~0.5-1s of presents without DLSS-SR before suspending
 static void EvalGate(bool evalThisFrame){
@@ -96,22 +97,22 @@ static void EvalGate(bool evalThisFrame){
     else if(g_genOn.load() && Rt().frames != appliedFrames){ SetDLSSGeneration(true); }
     appliedFrames = Rt().frames;
   }
-  if(Rt().fgUserOff){ g_evalStreak = 0; return; }
-  if(evalThisFrame){
-    g_idleStreak = 0;
-    if(g_evalStreak < 100000) g_evalStreak++;
-    if(!g_genOn.load() && g_evalStreak >= kOnAfterEvalFrames){
-      g_genOn.store(true); appliedFrames = Rt().frames; Log("gate: %u consecutive DLSS-SR frames -> DLSS-G ON", g_evalStreak); SetDLSSGeneration(true); }
-  } else {
-    g_evalStreak = 0;
-    if(g_idleStreak < 100000) g_idleStreak++;
-    if(g_genOn.load() && g_idleStreak >= kOffAfterIdleFrames){
-      g_genOn.store(false); Log("gate: %u presents without DLSS-SR (menu/loading/video) -> DLSS-G suspended (resources retained)", g_idleStreak); SetDLSSGeneration(false); }
+  if(Rt().fgUserOff){ g_gate.eval = 0; return; }
+  switch(g_gate.Step(evalThisFrame, g_genOn.load(), DLSSGAvailable(), kOnAfterEvalFrames, kOffAfterIdleFrames)){
+  case GateStep::TurnOn:
+    g_genOn.store(true); appliedFrames = Rt().frames; Log("gate: %u consecutive DLSS-SR frames -> DLSS-G ON", g_gate.eval); SetDLSSGeneration(true); break;
+  case GateStep::TurnOff:
+    g_genOn.store(false); Log("gate: %u presents without DLSS-SR (menu/loading/video) -> DLSS-G suspended (resources retained)", g_gate.idle); SetDLSSGeneration(false); break;
+  case GateStep::Unavailable: {
+    static bool logged = false;
+    if(!logged){ logged = true; Log("gate: %u consecutive DLSS-SR frames, but Streamline provided no DLSS-G - frame generation and PresentPacing stay off", g_gate.eval); }
+    break; }
+  case GateStep::Stay: break;
   }
 }
 // Guide 17.0: DLSS-G off before any swap-chain manipulation "to avoid potential deadlocks".
 static void GateOffForSwapchain(){
-  g_evalStreak = 0; g_idleStreak = 0;
+  g_gate.Reset();
   if(g_genOn.load()){ g_genOn.store(false); Log("gate: swapchain re-create -> DLSS-G suspended first"); SetDLSSGeneration(false); }
 }
 

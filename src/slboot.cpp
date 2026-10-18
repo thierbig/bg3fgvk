@@ -207,6 +207,10 @@ void SetDLSSGeneration(bool on){
   Log("SetDLSSGeneration(%d) frames=%u retainResources=1 -> %d", (int)on, n, (int)r);
 }
 
+// Both DLSS-G feature functions resolved. When Streamline drops sl.dlss_g at startup (NGX said
+// AdapterUnsupported, issue #9) they stay null and the gate must not pretend generation is on.
+bool DLSSGAvailable(){ return p_slDLSSGSetOptions && p_slDLSSGGetState; }
+
 // Present thread only (slDLSSGGetState is not thread safe and SL wants it synced with present).
 // Null options = status + frame stats only, no VRAM estimate (guide 13.0 / 17.0).
 void PollDLSSGState(){
