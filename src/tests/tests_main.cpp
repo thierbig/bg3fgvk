@@ -6,8 +6,9 @@ int test_slmodule();
 int test_presentpacer();
 int test_inimigrate();
 int test_evalgate();
+int test_ngxmodule();
 int main(){
-  int fails = test_mvecscale() + test_exportroute() + test_slmodule() + test_presentpacer() + test_inimigrate() + test_evalgate();
+  int fails = test_mvecscale() + test_exportroute() + test_slmodule() + test_presentpacer() + test_inimigrate() + test_evalgate() + test_ngxmodule();
   printf("%d failure(s)\n", fails);
   return fails ? 1 : 0;
 }

@@ -6,6 +6,7 @@
 // Full Vulkan resource descriptions are mandatory (an undefined format aborts inside SL).
 #include "inputs.h"
 #include "mvecscale.h"
+#include "ngxmodule.h"
 #include "log.h"
 #include "slboot.h"
 #include "vkhooks.h"
@@ -133,10 +134,7 @@ static VkImage g_uiImage{}; static VkDeviceMemory g_uiMem{}; static VkImageView 
 static uint32_t g_uiW=0, g_uiH=0; static bool g_uiFailed=false;
 
 // ---- module probe ---------------------------------------------------------------------
-template <typename Fn> static bool forEachNgxModule(Fn&& fn){
-  static const wchar_t* known[] = { L"sl.interposer.dll", L"sl.dlss.dll", L"sl.dlss_g.dll",
-                                    L"nvngx_dlss.dll", L"nvngx.dll", L"_nvngx.dll" };
-  for (auto n : known){ HMODULE m=GetModuleHandleW(n); if(m && fn(m,n)) return true; }
+template <typename Fn> static bool forEachLoadedModule(Fn&& fn){
   using PEnum = BOOL(WINAPI*)(HANDLE,HMODULE*,DWORD,LPDWORD);
   static PEnum pEnum = (PEnum)GetProcAddress(GetModuleHandleA("kernel32.dll"),"K32EnumProcessModules");
   if(!pEnum) return false;
@@ -147,6 +145,12 @@ template <typename Fn> static bool forEachNgxModule(Fn&& fn){
   for(DWORD i=0;i<count;i++){ wchar_t p[MAX_PATH]{}; if(!GetModuleFileNameW(mods[i],p,MAX_PATH)) continue;
     if(fn(mods[i],p)) return true; }
   return false;
+}
+template <typename Fn> static bool forEachNgxModule(Fn&& fn){
+  static const wchar_t* known[] = { L"sl.interposer.dll", L"sl.dlss.dll", L"sl.dlss_g.dll",
+                                    L"nvngx_dlss.dll", L"nvngx.dll", L"_nvngx.dll" };
+  for (auto n : known){ HMODULE m=GetModuleHandleW(n); if(m && fn(m,n)) return true; }
+  return forEachLoadedModule(fn);
 }
 
 // ---- resource helpers (ported) --------------------------------------------------------
@@ -464,10 +468,14 @@ void NgxProbeTick(){
   if(g_hooked) return;
   if(g_probeDelay-->0) return;
   g_probeDelay=120;
-  HMODULE found{}; const wchar_t* foundName=nullptr;
-  forEachNgxModule([&](HMODULE m, const wchar_t* name){
-    if(!GetProcAddress(m,"NVSDK_NGX_VULKAN_EvaluateFeature")) return false;
-    found=m; foundName=name; return true; });
+  // NGX's core only (ngxmodule.h): the feature snippets export the same evaluate entry point,
+  // so until the core is loaded the probe keeps waiting rather than hook one of them.
+  HMODULE found{}; int foundRank=-1; wchar_t foundName[MAX_PATH]{};
+  forEachLoadedModule([&](HMODULE m, const wchar_t* path){
+    int rank=NgxCoreRank(path);
+    if(rank<0 || (found && rank>=foundRank) || !GetProcAddress(m,"NVSDK_NGX_VULKAN_EvaluateFeature")) return false;
+    found=m; foundRank=rank; wcsncpy_s(foundName,path,_TRUNCATE);
+    return rank==0; });
   if(!found) return;
   o_NgxEvaluate=(PFN_NgxEvaluateFeature)GetProcAddress(found,"NVSDK_NGX_VULKAN_EvaluateFeature");
   o_NgxCreateFeature=(PFN_NgxCreateFeature)GetProcAddress(found,"NVSDK_NGX_VULKAN_CreateFeature");
@@ -486,7 +494,7 @@ void NgxProbeTick(){
   LONG rc=DetourTransactionCommit();
   g_hooked=(rc==NO_ERROR);
   Log("NGX hooks: module=%S commit=%ld eval=%p create=%p getters=%p/%p/%p",
-      foundName?foundName:L"?",rc,(void*)o_NgxEvaluate,(void*)o_NgxCreateFeature,
+      foundName,rc,(void*)o_NgxEvaluate,(void*)o_NgxCreateFeature,
       (void*)p_GetVoidPointer,(void*)p_GetF,(void*)p_GetUI);
 }
 
