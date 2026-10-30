@@ -19,4 +19,5 @@ void* SlProxyFn(const char* name);
 void OnDeviceCreated();
 void SetDLSSGeneration(bool on);   // Task 4 fills; called from the vkCreateDevice hook (Task 2)
 void PollDLSSGState();    // Task 4 fills; called from the present hook
+bool DLSSGAvailable();    // Streamline handed us DLSS-G (false when it dropped sl.dlss_g at startup)
 }
